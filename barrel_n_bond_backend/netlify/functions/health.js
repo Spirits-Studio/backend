@@ -1,3 +1,7 @@
-export default async (_req, res) => {
-  res.status(200).end('ok');
+export const handler = async () => {
+  return {
+    statusCode: 200,
+    headers: { 'Content-Type': 'text/plain' },
+    body: 'ok',
+  };
 };
