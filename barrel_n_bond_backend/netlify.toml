@@ -1,0 +1,8 @@
+[build]
+  command = "npm run build" # or "npm i" if no build step
+  publish = "dist"          # optional if you have a static site
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  included_files = ["src/**"]
