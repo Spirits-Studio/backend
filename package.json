@@ -1,0 +1,16 @@
+{
+  "name": "barrel-n-bond-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "echo \"no build\"",
+    "deploy": "netlify deploy --prod"
+  },
+  "dependencies": {
+    "undici": "^6.19.8"
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.34.0"
+  }
+}
