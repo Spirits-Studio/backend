@@ -4,15 +4,16 @@ import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 // In-memory cache for the short-lived token
 let cache = { token: null, exp: 0 };
 
-function json(status, obj, extraHeaders = {}) {
-  return new Response(JSON.stringify(obj), {
-    status,
+function send(status, obj, extraHeaders = {}) {
+  return {
+    statusCode: status,
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
       ...extraHeaders
-    }
-  });
+    },
+    body: JSON.stringify(obj)
+  };
 }
 
 async function fetchZakekeToken({ accessType } = {}) {
@@ -34,22 +35,21 @@ async function fetchZakekeToken({ accessType } = {}) {
     throw { status: 500, code: "missing_zakeke_env", message: "Missing Zakeke env vars", missing };
   }
 
-  // Per Zakeke docs: credentials in x-www-form-urlencoded body
-  const body = new URLSearchParams({
-    grant_type: "client_credentials",
-    client_id: clientId,
-    client_secret: clientSecret
-  });
+  // Per Zakeke docs: credentials in Basic Auth header, grant_type in x-www-form-urlencoded body
+  const body = new URLSearchParams({ grant_type: "client_credentials" });
   if (accessType && /^(S2S|C2S)$/i.test(accessType)) {
     body.set("access_type", accessType.toUpperCase());
   }
+
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
   const res = await fetch("https://api.zakeke.com/token", {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Accept-Language": "en-US",
-      "Content-Type": "application/x-www-form-urlencoded"
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Basic ${credentials}`
     },
     body
   });
@@ -100,7 +100,7 @@ export default withShopifyProxy(
         accessType: accessType || null
       });
 
-      return json(200, {
+      return send(200, {
         token,
         expiresIn: expires_in,
         cached,
@@ -108,7 +108,7 @@ export default withShopifyProxy(
       });
     } catch (e) {
       console.error("get-zakeke-token error", e);
-      return json(e.status || 502, {
+      return send(e.status || 502, {
         error: e.code || "server_error",
         message: e.message || String(e),
         details: e.missing || e.data
