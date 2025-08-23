@@ -11,7 +11,9 @@
     "build:functions": "netlify functions:build",
     "deploy": "netlify deploy --prod"
   },
-  "dependencies": {},
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  },
   "devDependencies": {
     "netlify-cli": "^17.34.0"
   }
