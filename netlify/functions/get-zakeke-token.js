@@ -22,36 +22,34 @@ async function fetchZakekeToken({ accessType } = {}) {
     return { token: cache.token, expires_in: ttl, cached: true };
   }
 
-  const clientId = process.env.ZAKEKE_CLIENT_ID;
-  const clientSecret = process.env.ZAKEKE_SECRET_KEY || process.env.ZAKEKE_CLIENT_SECRET;
+  const url = 'https://api.zakeke.com/token';
+  const clientId = '<your_client_id>';
+  const clientSecret = '<your_client_secret>';
 
   if (!clientId || !clientSecret) {
     const missing = {
       ZAKEKE_CLIENT_ID: !!clientId,
-      ZAKEKE_SECRET_KEY: !!process.env.ZAKEKE_SECRET_KEY,
       ZAKEKE_CLIENT_SECRET: !!process.env.ZAKEKE_CLIENT_SECRET
     };
     throw { status: 500, code: "missing_zakeke_env", message: "Missing Zakeke env vars", missing };
   }
 
-  // Per Zakeke docs: credentials in Basic Auth header, grant_type in x-www-form-urlencoded body
-  const body = new URLSearchParams({ grant_type: "client_credentials" });
-  if (accessType && /^(S2S|C2S)$/i.test(accessType)) {
-    body.set("access_type", accessType.toUpperCase());
-  }
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
-  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-  const res = await fetch("https://api.zakeke.com/token", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Accept-Language": "en-US",
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${credentials}`
-    },
-    body
-  });
+  fetch(url, {
+      method: 'POST',
+      headers: {
+          'Accept': 'application/json',
+          'Accept-Language': 'en-US',
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Authorization': `Basic ${credentials}`,
+      },
+      body: 'grant_type=client_credentials'
+  })
+  .then(response => response.json())
+  .then(data => console.log(data))
+  .catch(error => console.error('Error:', error));
+};
 
   const raw = await res.text();
 
