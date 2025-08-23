@@ -42,7 +42,7 @@ export const handler = withShopifyProxy(
     };
   },
   {
-    methods: ["GET"],
+    methods: ["GET", "POST"],
     allowlist: [process.env.SHOPIFY_STORE_DOMAIN], // e.g. barrelnbond.myshopify.com
     requireShop: true
   }
