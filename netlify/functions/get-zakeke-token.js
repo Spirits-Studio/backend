@@ -89,16 +89,20 @@ async function fetchZakekeToken({ accessType } = {}) {
 export default withShopifyProxy(
   async (event) => {
     try {
-      const qs = event.queryStringParameters || {};
+      const urlObj = event?.url ? new URL(event.url) : null;
+      const qs =
+        urlObj
+          ? Object.fromEntries(urlObj.searchParams.entries())
+          : (event.queryStringParameters || {});
+      const path = event?.path || urlObj?.pathname;
+
       const refresh = qs.refresh === "1" || qs.refresh === "true";
       const accessType = qs.access_type;
 
-      console.log("get-zakeke-token hit", { path: event.path, qs });
+      console.log("get-zakeke-token hit", { path, qs });
 
       if (refresh) cache = { token: null, exp: 0 };
-
       const { token, expires_in, cached } = await fetchZakekeToken({ accessType });
-
       return send(200, { token, expiresIn: expires_in, cached, accessType: accessType || null });
     } catch (e) {
       return send(e.status || 502, {
