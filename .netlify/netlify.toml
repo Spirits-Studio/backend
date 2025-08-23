@@ -1,0 +1,32 @@
+functionsDirectory = "/Users/marcus/Documents/code/barrel_n_bond/barrel_n_bond_backend/netlify/functions"
+functionsDirectoryOrigin = "config-v1"
+plugins = []
+headers = []
+redirects = []
+
+[build]
+publish = "/Users/marcus/Documents/code/barrel_n_bond/barrel_n_bond_backend"
+publishOrigin = "default"
+commandOrigin = "config"
+command = "npm install"
+functions = "/Users/marcus/Documents/code/barrel_n_bond/barrel_n_bond_backend/netlify/functions"
+
+[build.environment]
+
+[build.processing]
+
+[build.processing.css]
+
+[build.processing.html]
+
+[build.processing.images]
+
+[build.processing.js]
+
+[build.services]
+
+[functions]
+
+[functions."*"]
+included_files = ["src/**"]
+node_bundler = "esbuild"

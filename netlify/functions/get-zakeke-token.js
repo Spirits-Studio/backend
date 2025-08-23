@@ -1,50 +1,69 @@
 // netlify/functions/get-zakeke-token.js
-import { withShopifyProxy } from "./_lib/shopifyProxy.js";
+import { withShopifyProxy } from './_lib/shopifyProxy.js';
 
-let cached = { token: null, exp: 0 };
+let cache = { token: null, exp: 0 };
 
-async function fetchZakekeToken() {
-  if (cached.token && Date.now() < cached.exp) {
-    return { access_token: cached.token, expires_in: Math.floor((cached.exp - Date.now()) / 1000) };
-  }
-
-  const res = await fetch("https://api.zakeke.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: process.env.ZAKEKE_CLIENT_ID || "",
-      client_secret: process.env.ZAKEKE_SECRET_KEY || "",
-      grant_type: "client_credentials",
-      scope: "api"
-    })
-  });
-
-  const text = await res.text();
-  if (!res.ok) {
-    console.error("Zakeke token request failed", { status: res.status, body: text });
-    throw new Error(`zakeke_token_failed status=${res.status}`);
-  }
-
-  const data = JSON.parse(text); // { access_token, token_type, expires_in }
-  const skew = 60;
-  cached = { token: data.access_token, exp: Date.now() + Math.max(0, data.expires_in - skew) * 1000 };
-  return data;
+function b64(str) {
+  return Buffer.from(str, 'utf8').toString('base64');
 }
 
-export const handler = withShopifyProxy(
-  async (_event, { shop }) => {
-    // (shop is verified & allow‑listed already)
-    const data = await fetchZakekeToken();
-    console.log("data in withShopifyProxy", data);
+async function fetchZakekeToken() {
+  if (cache.token && Date.now() < cache.exp) {
+    return { token: cache.token, expires_in: Math.floor((cache.exp - Date.now()) / 1000) };
+  }
+
+  const clientId = process.env.ZAKEKE_CLIENT_ID || '';
+  const clientSecret = process.env.ZAKEKE_SECRET_KEY || '';
+  if (!clientId || !clientSecret) throw new Error('missing_zakeke_env');
+
+  const body = new URLSearchParams({
+    grant_type: 'client_credentials',
+    // Use S2S if you’ll call Orders/Compositions APIs with this token:
+    // access_type: 'S2S'
+  });
+
+  const res = await fetch('https://api.zakeke.com/token', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: `Basic ${b64(`${clientId}:${clientSecret}`)}`
+    },
+    body
+  });
+
+  const raw = await res.text();
+  if (!res.ok) {
+    console.error('Zakeke token request failed', { status: res.status, body: raw });
+    throw new Error(`zakeke_${res.status}`);
+  }
+
+  let json;
+  try { json = JSON.parse(raw); } catch { throw new Error('zakeke_non_json'); }
+
+  // field is "access-token" (dash), not "access_token"
+  const token = json['access-token'];
+  const ttl = json.expires_in;
+  if (!token || !ttl) throw new Error('zakeke_missing_fields');
+
+  const skew = 60;
+  cache = { token, exp: Date.now() + (ttl - skew) * 1000 };
+  return { token, expires_in: ttl };
+}
+
+export default withShopifyProxy(async () => {
+  try {
+    const { token, expires_in } = await fetchZakekeToken();
     return {
       statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: data.access_token, expiresIn: data.expires_in, shop })
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, expiresIn: expires_in })
     };
-  },
-  {
-    methods: ["GET", "POST"],
-    allowlist: [process.env.SHOPIFY_STORE_DOMAIN], // e.g. barrelnbond.myshopify.com
-    requireShop: true
+  } catch (e) {
+    return {
+      statusCode: 502,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ error: String(e) })
+    };
   }
-);
+}, { methods: ['GET','POST'], allowlist: [process.env.SHOPIFY_STORE_DOMAIN], requireShop: true });
