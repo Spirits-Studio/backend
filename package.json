@@ -16,5 +16,10 @@
   },
   "devDependencies": {
     "netlify-cli": "^17.34.0"
+  },
+  "netlify": {
+    "functions": {
+      "node_bundler": "esbuild"
+    }
   }
 }
