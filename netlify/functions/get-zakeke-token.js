@@ -1,4 +1,16 @@
+
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
+
+function jsonResponse(status, bodyObj, extraHeaders = {}) {
+  return new Response(JSON.stringify(bodyObj), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-store',
+      ...extraHeaders
+    }
+  });
+}
 
 export default withShopifyProxy(
   async (event) => {
