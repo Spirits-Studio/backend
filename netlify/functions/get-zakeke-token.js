@@ -5,15 +5,14 @@ import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 let cache = { token: null, exp: 0 };
 
 function send(status, obj, extraHeaders = {}) {
-  return {
-    statusCode: status,
+  return new Response(JSON.stringify(obj), {
+    status,
     headers: {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
       ...extraHeaders
-    },
-    body: JSON.stringify(obj)
-  };
+    }
+  });
 }
 
 async function fetchZakekeToken({ accessType } = {}) {
