@@ -1,117 +1,101 @@
 // netlify/functions/get-zakeke-token.js
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import fetch from 'node-fetch';
 
 let cache = { token: null, exp: 0 };
 
-async function fetchZakekeToken({ accessType } = {}) {
-  const currentTimestamp = Math.floor(Date.now() / 1000);
-  if (cache.token && cache.exp > currentTimestamp) {
-    return { token: cache.token, expires_in: cache.exp - currentTimestamp, cached: true };
-  }
-
-  const client_id = process.env.ZAKEKE_CLIENT_ID;
-  const client_secret = process.env.ZAKEKE_CLIENT_SECRET;
-  const url = 'https://api.zakeke.com/token';
-
-  if (!client_id || !client_secret) {
-    throw {
-      code: 'missing_zakeke_credentials',
-      status: 500,
-      message: 'Zakeke client ID or secret is not configured.'
-    };
-  }
-
-  const grant_type = (accessType || process.env.ZAKEKE_ACCESS_TYPE || 'client_credentials').toLowerCase();
-  const body = new URLSearchParams({ client_id, client_secret, grant_type });
-
-  const response = await fetch(url, {
-    method: 'POST',
+function jsonResponse(status, bodyObj, extraHeaders = {}) {
+  return new Response(JSON.stringify(bodyObj), {
+    status,
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      'Accept': 'application/json'
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      ...extraHeaders
+    }
+  });
+}
+
+function basicAuth(id, secret) {
+  return "Basic " + Buffer.from(`${id}:${secret}`, "utf8").toString("base64");
+}
+
+async function fetchZakekeToken({ accessType } = {}) {
+  const now = Date.now();
+  if (cache.token && cache.exp > now) {
+    const ttl = Math.max(0, Math.floor((cache.exp - now) / 1000));
+    return { token: cache.token, expires_in: ttl, cached: true };
+  }
+
+  const clientId = process.env.ZAKEKE_CLIENT_ID;
+  const clientSecret = process.env.ZAKEKE_SECRET_KEY || process.env.ZAKEKE_CLIENT_SECRET; // support your current var
+
+  if (!clientId || !clientSecret) {
+    const missing = { ZAKEKE_CLIENT_ID: !!clientId, ZAKEKE_SECRET: !!clientSecret };
+    throw { code: "missing_zakeke_env", status: 500, message: "Missing Zakeke creds", missing };
+  }
+
+  const body = new URLSearchParams({ grant_type: "client_credentials" });
+  // Optional: access_type=S2S|C2S (NOT part of grant_type)
+  if (accessType && /^(S2S|C2S)$/i.test(accessType)) {
+    body.set("access_type", accessType.toUpperCase());
+  }
+
+  const res = await fetch("https://api.zakeke.com/token", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: basicAuth(clientId, clientSecret)
     },
     body
   });
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw {
-      code: 'zakeke_auth_failed',
-      status: response.status,
-      message: 'Failed to obtain Zakeke token.',
-      data: errorData
-    };
+  const raw = await res.text();
+  if (!res.ok) {
+    console.error("Zakeke token fail", res.status, raw.slice(0, 400));
+    throw { code: `zakeke_http_${res.status}`, status: 502, message: raw };
   }
 
-  const { access_token, expires_in } = await response.json();
-  const exp = currentTimestamp + expires_in - 300; // Cache for 5 mins less than expiry
+  let json;
+  try { json = JSON.parse(raw); } catch { throw { code: "zakeke_non_json", status: 502, message: raw.slice(0, 200) }; }
 
-  cache = { token: access_token, exp };
+  const token = json["access-token"]; // <-- dash!
+  const expires_in = Number(json.expires_in || 0);
+  if (!token || !expires_in) {
+    throw { code: "zakeke_missing_fields", status: 502, message: "No token/expires_in", data: json };
+  }
 
-  return { token: access_token, expires_in, cached: false };
-}
-
-function jsonResponse(status, bodyObj, extraHeaders = {}) {
-  return {
-    statusCode: status,
-    headers: {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'no-store',
-      ...extraHeaders
-    },
-    body: JSON.stringify(bodyObj)
-  };
+  // cache with 60s skew
+  cache = { token, exp: now + (expires_in - 60) * 1000 };
+  return { token, expires_in, cached: false };
 }
 
 export default withShopifyProxy(
   async (event) => {
     try {
-      console.log("Incoming event path:", event.path);
-      console.log("Incoming query parameters:", event.queryStringParameters);
-
       const qs = event.queryStringParameters || {};
-      const refresh = qs.refresh === '1' || qs.refresh === 'true';
-      const accessType = qs.access_type;
+      const refresh = qs.refresh === "1" || qs.refresh === "true";
+      const accessType = qs.access_type; // e.g. S2S
 
-      if (refresh) {
-        cache = { token: null, exp: 0 };
-        console.log("Refresh triggered: cache cleared");
-      }
+      if (refresh) cache = { token: null, exp: 0 };
 
       const { token, expires_in, cached } = await fetchZakekeToken({ accessType });
 
-      console.log(`Returning token details: token length=${token ? token.length : 0}, expires_in=${expires_in}, cached=${cached}`);
+      // don’t log the token; just metadata
+      console.log("zakeke token ok", { len: token.length, expires_in, cached, accessType });
 
-      const res = jsonResponse(
-        200,
-        { token, expiresIn: expires_in, cached, accessType: (accessType || process.env.ZAKEKE_ACCESS_TYPE || null) }
-      );
-
-      // Log the successful response object before returning
-      console.log("Success Response Object:", JSON.stringify(res, null, 2));
-
-      return res;
+      return jsonResponse(200, { token, expiresIn: expires_in, cached, accessType: accessType || null });
     } catch (e) {
-      console.error("Error occurred:", e);
-
-      const code = e?.code || 'server_error';
-      const status = e?.status && Number.isInteger(e.status) ? e.status : 502;
-
-      const errorRes = jsonResponse(status, {
-        error: code,
+      console.error("get-zakeke-token error", e);
+      const status = Number.isInteger(e?.status) ? e.status : 502;
+      return jsonResponse(status, {
+        error: e?.code || "server_error",
         message: e?.message || String(e),
-        details: e?.missing || e?.data || undefined
+        details: e?.missing || e?.data
       });
-
-      // Log the error response object before returning
-      console.log("Error Response Object:", JSON.stringify(errorRes, null, 2));
-
-      return errorRes;
     }
   },
   {
-    methods: ['GET', 'POST'],
+    methods: ["GET", "POST"],
     allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
     requireShop: true
   }
