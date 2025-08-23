@@ -81,7 +81,7 @@ async function fetchZakekeToken({ accessType } = {}) {
   try { data = JSON.parse(raw); }
   catch { throw { status: 502, code: "zakeke_non_json", message: raw.slice(0, 200) }; }
 
-  const token = data["access-token"];
+  const token = data.access_token || data["access-token"];
   const expires_in = Number(data.expires_in || 0);
   if (!token || !expires_in) {
     throw { status: 502, code: "zakeke_missing_fields", message: "No token/expires_in", data };
