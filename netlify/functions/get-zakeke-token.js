@@ -34,6 +34,11 @@ async function fetchZakekeToken({ accessType } = {}) {
     throw { status: 500, code: "missing_zakeke_env", message: "Missing Zakeke env vars", missing };
   }
 
+  console.log("zakeke env present", {
+    id_tail: (process.env.ZAKEKE_CLIENT_ID || "").slice(-4),
+    hasSecret: !!(process.env.ZAKEKE_SECRET_KEY || process.env.ZAKEKE_CLIENT_SECRET)
+  });
+
   const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
   // first try: Basic auth header + grant_type in body
@@ -88,7 +93,9 @@ async function fetchZakekeToken({ accessType } = {}) {
 
 export default withShopifyProxy(
   async (event) => {
+    console.log("withShopifyProxy reached")
     try {
+      console.log("withShopifyProxy try block reached")
       const urlObj = event?.url ? new URL(event.url) : null;
       const qs =
         urlObj
@@ -102,9 +109,13 @@ export default withShopifyProxy(
       console.log("get-zakeke-token hit", { path, qs });
 
       if (refresh) cache = { token: null, exp: 0 };
+      console.log("withShopifyProxy fetchZakekeToken reached")
       const { token, expires_in, cached } = await fetchZakekeToken({ accessType });
+      console.log("withShopifyProxy fetchZakekeToken successful: token", token, "expires_in", expires_in, "cached", cached)
       return send(200, { token, expiresIn: expires_in, cached, accessType: accessType || null });
+
     } catch (e) {
+      console.log("withShopifyProxy error block reached e", e)
       return send(e.status || 502, {
         error: e.code || "server_error",
         message: e.message || String(e),
