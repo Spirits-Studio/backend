@@ -83,21 +83,31 @@ export default withShopifyProxy(
 
       console.log(`Returning token details: token length=${token ? token.length : 0}, expires_in=${expires_in}, cached=${cached}`);
 
-      return jsonResponse(
+      const res = jsonResponse(
         200,
         { token, expiresIn: expires_in, cached, accessType: (accessType || process.env.ZAKEKE_ACCESS_TYPE || null) }
       );
+
+      // Log the successful response object before returning
+      console.log("Success Response Object:", JSON.stringify(res, null, 2));
+
+      return res;
     } catch (e) {
       console.error("Error occurred:", e);
 
       const code = e?.code || 'server_error';
       const status = e?.status && Number.isInteger(e.status) ? e.status : 502;
 
-      return jsonResponse(status, {
+      const errorRes = jsonResponse(status, {
         error: code,
         message: e?.message || String(e),
         details: e?.missing || e?.data || undefined
       });
+
+      // Log the error response object before returning
+      console.log("Error Response Object:", JSON.stringify(errorRes, null, 2));
+
+      return errorRes;
     }
   },
   {
