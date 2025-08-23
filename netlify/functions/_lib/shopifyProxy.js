@@ -23,7 +23,7 @@ export function withShopifyProxy(handler, {
     delete qs.signature; delete qs.hmac;
 
     const message = Object.keys(qs).sort().map(k => `${k}=${qs[k] ?? ""}`).join("");
-    const digestHex = crypto.createHmac("sha256", process.env.SHOPIFY_APP_API_SECRET)
+    const digestHex = crypto.createHmac("sha256", process.env.SHOPIFY_CLIENT_SECRET)
       .update(message, "utf8").digest("hex");
 
     const a = Buffer.from(digestHex, "hex");

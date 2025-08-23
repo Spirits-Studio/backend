@@ -35,6 +35,7 @@ export const handler = withShopifyProxy(
   async (_event, { shop }) => {
     // (shop is verified & allow‑listed already)
     const data = await fetchZakekeToken();
+    console.log("data in withShopifyProxy", data);
     return {
       statusCode: 200,
       headers: { "Content-Type": "application/json" },
