@@ -1,15 +1,67 @@
-
+// netlify/functions/get-zakeke-token.js
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
+import fetch from 'node-fetch';
+
+let cache = { token: null, exp: 0 };
+
+async function fetchZakekeToken({ accessType } = {}) {
+  const currentTimestamp = Math.floor(Date.now() / 1000);
+  if (cache.token && cache.exp > currentTimestamp) {
+    return { token: cache.token, expires_in: cache.exp - currentTimestamp, cached: true };
+  }
+
+  const client_id = process.env.ZAKEKE_CLIENT_ID;
+  const client_secret = process.env.ZAKEKE_CLIENT_SECRET;
+  const url = 'https://api.zakeke.com/token';
+
+  if (!client_id || !client_secret) {
+    throw {
+      code: 'missing_zakeke_credentials',
+      status: 500,
+      message: 'Zakeke client ID or secret is not configured.'
+    };
+  }
+
+  const grant_type = (accessType || process.env.ZAKEKE_ACCESS_TYPE || 'client_credentials').toLowerCase();
+  const body = new URLSearchParams({ client_id, client_secret, grant_type });
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'Accept': 'application/json'
+    },
+    body
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw {
+      code: 'zakeke_auth_failed',
+      status: response.status,
+      message: 'Failed to obtain Zakeke token.',
+      data: errorData
+    };
+  }
+
+  const { access_token, expires_in } = await response.json();
+  const exp = currentTimestamp + expires_in - 300; // Cache for 5 mins less than expiry
+
+  cache = { token: access_token, exp };
+
+  return { token: access_token, expires_in, cached: false };
+}
 
 function jsonResponse(status, bodyObj, extraHeaders = {}) {
-  return new Response(JSON.stringify(bodyObj), {
-    status,
+  return {
+    statusCode: status,
     headers: {
       'Content-Type': 'application/json',
       'Cache-Control': 'no-store',
       ...extraHeaders
-    }
-  });
+    },
+    body: JSON.stringify(bodyObj)
+  };
 }
 
 export default withShopifyProxy(
@@ -18,9 +70,6 @@ export default withShopifyProxy(
       console.log("Incoming event path:", event.path);
       console.log("Incoming query parameters:", event.queryStringParameters);
 
-      // Optional controls via query string:
-      // ?refresh=1 -> bypass cache
-      // ?access_type=S2S|C2S -> force access type
       const qs = event.queryStringParameters || {};
       const refresh = qs.refresh === '1' || qs.refresh === 'true';
       const accessType = qs.access_type;
@@ -53,7 +102,6 @@ export default withShopifyProxy(
   },
   {
     methods: ['GET', 'POST'],
-    // Only allow requests proxied from your Shopify store
     allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
     requireShop: true
   }
