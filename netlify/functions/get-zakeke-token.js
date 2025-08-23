@@ -36,7 +36,8 @@ async function fetchZakekeToken({ accessType } = {}) {
 
   const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
-  const res = await fetch(url, {
+  // first try: Basic auth header + grant_type in body
+  let res = await fetch(url, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -47,7 +48,25 @@ async function fetchZakekeToken({ accessType } = {}) {
     body: "grant_type=client_credentials"
   });
 
-  const raw = await res.text(); // <-- get text
+  // fallback: some tenants require creds in body (no Basic)
+  if (res.status === 401 || res.status === 415) {
+    const body = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret
+    });
+    res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Accept-Language": "en-US",
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body
+    });
+  }
+
+  const raw = await res.text();
   if (!res.ok) {
     console.error("Zakeke token request failed", { status: res.status, body: raw?.slice(0, 400) });
     throw { status: 502, code: `zakeke_http_${res.status}`, message: raw };
