@@ -1,3 +1,5 @@
+import { withShopifyProxy } from "./_lib/shopifyProxy.js";
+
 export default withShopifyProxy(
   async (event) => {
     try {
