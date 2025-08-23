@@ -2,27 +2,25 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 
 
-async function fetchZakekeToken() {
-  const url = 'https://api.zakeke.com/token';
-  const params = new URLSearchParams();
+async function fetchZakekeToken() {  
+const url = 'https://api.zakeke.com/token';
+const clientId = process.env.ZAKEKE_CLIENT_ID
+const clientSecret = process.env.ZAKEKE_CLIENT_SECRET
+const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
 
-  params.append('grant_type', 'client_credentials');
-  params.append('client_id', process.env.ZAKEKE_CLIENT_ID);
-  params.append('client_secret', process.env.ZAKEKE_CLIENT_SECRET);
-
-  fetch(url, {
-      method: 'POST',
-      headers: {
-          'Accept': 'application/json',
-          'Accept-Language': 'en-US',
-          'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: params
-  })
-  .then(response => response.json())
-  .then(data => console.log(data))
-  .catch(error => console.error('Error:', error));
-}
+fetch(url, {
+    method: 'POST',
+    headers: {
+        'Accept': 'application/json',
+        'Accept-Language': 'en-US',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${credentials}`,
+    },
+    body: 'grant_type=client_credentials'
+})
+.then(response => response.json())
+.then(data => console.log(data))
+.catch(error => console.error('Error:', error));
 
 export default withShopifyProxy(
   async (event) => {
@@ -35,10 +33,10 @@ export default withShopifyProxy(
 
       const { token, expires_in, cached } = await fetchZakekeToken({ accessType });
 
-      // don’t log the token; just metadata
       console.log("zakeke token ok", { len: token.length, expires_in, cached, accessType });
 
       return jsonResponse(200, { token, expiresIn: expires_in, cached, accessType: accessType || null });
+      
     } catch (e) {
       console.error("get-zakeke-token error", e);
       const status = Number.isInteger(e?.status) ? e.status : 502;
