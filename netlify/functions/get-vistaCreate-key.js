@@ -28,9 +28,9 @@ function getVistaCreateKey() {
 export default withShopifyProxy(async () => {
   console.log("get-vistaCreate-key hit");
   try {
-    const token = getVistaCreateKey();
-    console.log("withShopifyProxy get-vistaCreate-key token found", token );
-    return send(200, { token });
+    const key = getVistaCreateKey();
+    console.log("withShopifyProxy get-vistaCreate-key token found", key );
+    return send(200, { key });
     
   } catch (e) {
     console.log("withShopifyProxy get-vistaCreate-key error block hit", e);
