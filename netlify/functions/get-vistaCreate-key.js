@@ -26,11 +26,14 @@ function getVistaCreateKey() {
 }
 
 export default withShopifyProxy(async () => {
+  console.log("get-vistaCreate-key hit");
   try {
     const token = getVistaCreateKey();
+    console.log("withShopifyProxy get-vistaCreate-key token found", token );
     return send(200, { token });
     
   } catch (e) {
+    console.log("withShopifyProxy get-vistaCreate-key error block hit", e);
     return send(e.status || 502, {
       error: e.code || "server_error",
       message: e.message || String(e),
