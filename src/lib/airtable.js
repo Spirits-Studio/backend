@@ -1,5 +1,5 @@
 const base = () => `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}`;
-const auth = { Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}` };
+const auth = { Authorization: `Bearer ${process.env.AIRTABLE_TOKEN}` };
 
 export async function findOneBy(table, field, value) {
   console.log("airtable findOneBy hit")
