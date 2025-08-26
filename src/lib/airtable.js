@@ -1,5 +1,3 @@
-import { fetch } from 'undici';
-
 const base = () => `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}`;
 const auth = { Authorization: `Bearer ${process.env.AIRTABLE_API_KEY}` };
 
