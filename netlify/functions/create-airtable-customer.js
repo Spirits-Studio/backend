@@ -1,5 +1,5 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { findOneBy, createOne, updateOne } from "./_lib/airtable.js";
+import { findOneBy, createOne, updateOne } from "../../src/lib/airtable.js";
 
 const send = (status, obj) =>
   new Response(JSON.stringify(obj), {
