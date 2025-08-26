@@ -1,48 +1,107 @@
 const base = () => `https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}`;
 const auth = { Authorization: `Bearer ${process.env.AIRTABLE_TOKEN}` };
 
-export async function findOneBy(table, field, value) {
-  console.log("airtable findOneBy hit")
-  console.log("airtable findOneBy table", table)
-  console.log("airtable findOneBy field", field)
-  console.log("airtable findOneBy value", value)
-  const url = new URL(`${base()}/${encodeURIComponent(table)}`);
-  url.searchParams.set('maxRecords', '1');
-  url.searchParams.set('filterByFormula', `({${field}}='${String(value).replace(/'/g,"\\'")}')`);
-  const r = await fetch(url, { headers: auth });
-  const j = await r.json();
-  return j.records?.[0] || null;
-}
-
-export async function createOne(table, fields) {
-  console.log("airtable createOne hit")
-  console.log("airtable createOne table", table)
-  console.log("airtable createOne fields", fields)
-  const r = await fetch(`${base()}/${encodeURIComponent(table)}`, {
-    method: 'POST',
-    headers: { ...auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ records: [{ fields }] })
+/**
+ * Internal helper to call Airtable and surface verbose errors.
+ * Returns parsed JSON on success, otherwise throws an Error
+ * with status, url, method and responseText for browser logging.
+ */
+async function airtableRequest(path, { method = "GET", headers = {}, body } = {}) {
+  const url = `${base()}/${encodeURIComponent(path)}`;
+  const response = await fetch(url, {
+    method,
+    headers: { ...auth, ...headers },
+    body
   });
-  if (!r.ok) {
-    console.log("airtable createOne failed", await r.text())
-    throw new Error(`Airtable create failed: ${await r.text()}`);
+
+  const responseText = await response.text();
+  let json;
+  try { json = responseText ? JSON.parse(responseText) : null; } catch { json = null; }
+
+  if (!response.ok) {
+    const err = new Error(
+      `Airtable ${method} ${url} failed with ${response.status} ${response.statusText}: ${responseText}`
+    );
+    err.status = response.status;
+    err.url = url;
+    err.method = method;
+    err.responseText = responseText;
+    err.requestBody = body;
+    throw err;
   }
-  const j = await r.json();
-  console.log("airtable createOne response", j)
-  return j.records[0];
+
+  return json;
 }
 
+/**
+ * Find the first record in `table` where {field} == value
+ * Returns the record object or null.
+ */
+export async function findOneBy(table, field, value) {
+  try {
+    console.log("[airtable] findOneBy", { table, field, value });
+
+    const url = new URL(`${base()}/${encodeURIComponent(table)}`);
+    url.searchParams.set("maxRecords", "1");
+    // Escape single quotes in the value for Airtable formula syntax
+    const safe = String(value).replace(/'/g, "\\'");
+    url.searchParams.set("filterByFormula", `({${field}}='${safe}')`);
+
+    const response = await fetch(url, { headers: auth });
+    const json = await response.json();
+
+    const record = json.records?.[0] || null;
+    console.log("[airtable] findOneBy result", { found: !!record, id: record?.id });
+    return record;
+  } catch (err) {
+    // Ensure verbose error bubbles up to the caller (and browser)
+    console.error("[airtable] findOneBy error", err);
+    throw err;
+  }
+}
+
+/**
+ * Create a record in `table` with `fields`.
+ * Returns the created record object.
+ */
+export async function createOne(table, fields) {
+  try {
+    console.log("[airtable] createOne", { table, fields });
+
+    const json = await airtableRequest(table, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: [{ fields }] /*, typecast: true*/ })
+    });
+
+    const record = json.records?.[0];
+    console.log("[airtable] createOne result", { id: record?.id });
+    return record;
+  } catch (err) {
+    console.error("[airtable] createOne error", err);
+    throw err;
+  }
+}
+
+/**
+ * Update a record by id in `table` with `fields`.
+ * Returns the updated record object.
+ */
 export async function updateOne(table, recordId, fields) {
-  console.log("airtable updateOne hit")
-  console.log("airtable updateOne table", table)
-  console.log("airtable updateOne recordId", recordId)
-  console.log("airtable updateOne fields", fields)
-  const r = await fetch(`${base()}/${encodeURIComponent(table)}`, {
-    method: 'PATCH',
-    headers: { ...auth, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ records: [{ id: recordId, fields }] })
-  });
-  if (!r.ok) throw new Error(`Airtable update failed: ${await r.text()}`);
-  const j = await r.json();
-  return j.records[0];
+  try {
+    console.log("[airtable] updateOne", { table, recordId, fields });
+
+    const json = await airtableRequest(table, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: [{ id: recordId, fields }] /*, typecast: true*/ })
+    });
+
+    const record = json.records?.[0];
+    console.log("[airtable] updateOne result", { id: record?.id });
+    return record;
+  } catch (err) {
+    console.error("[airtable] updateOne error", err);
+    throw err;
+  }
 }

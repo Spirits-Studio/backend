@@ -29,30 +29,34 @@ const parseBody = async (arg, method, isV2) => {
   }
 };
 
+// small helper to read from qs first (HMAC-signed), then body
+const pick = (qs, body, ...keys) => {
+  for (const k of keys) {
+    const v = qs?.[k] ?? body?.[k];
+    if (v !== undefined && v !== null && String(v).length) return String(v);
+  }
+  return null;
+};
+
 export default withShopifyProxy(
   async (arg, { qs, isV2, method, shop }) => {
     try {
-      const body = await parseBody(arg, method, isV2);
+      const body = await parseBody(arg, method, isV2) || {};
 
       // Prefer HMAC-signed query params from the App Proxy URL; fall back to body.
-      const customerId =
-        (qs.customer_id && String(qs.customer_id)) ||
-        (body && (body.customer_id || body.customerId)) ||
-        null;
-      const email =
-        (qs.email && String(qs.email)) ||
-        (body && (body.email || body.customer_email || body.customerEmail)) ||
-        null;
+      const customerId = pick(qs, body, "customer_id", "customerId");
+      const email = pick(qs, body, "email", "customer_email", "customerEmail");
+      const firstName = pick(qs, body, "first_name", "firstName");
+      const lastName = pick(qs, body, "last_name", "lastName");
+      const phone = pick(qs, body, "phone", "customer_phone", "customerPhone");
 
-      // Optional extra fields you might send from theme/frontend
-      const firstName =
-        (qs.first_name && String(qs.first_name)) ||
-        (body && (body.first_name || body.firstName)) ||
-        null;
-      const lastName =
-        (qs.last_name && String(qs.last_name)) ||
-        (body && (body.last_name || body.lastName)) ||
-        null;
+      // Optional address info (usually from Liquid if you choose to pass it)
+      const address1 = pick(qs, body, "address1");
+      const address2 = pick(qs, body, "address2");
+      const city = pick(qs, body, "city");
+      const province = pick(qs, body, "province", "region");
+      const zip = pick(qs, body, "zip", "postal_code", "postcode");
+      const country = pick(qs, body, "country");
 
       // 1) If we have a Shopify user (id or email): find or create
       if (customerId || email) {
@@ -69,15 +73,24 @@ export default withShopifyProxy(
         }
 
         if (record) {
-          // Optionally keep fields in sync
+          // Keep fields in sync where new data provided
           const updates = {};
           if (email && record.fields.Email !== email) updates.Email = email;
-          if (firstName && record.fields["First Name"] !== firstName)
-            updates["First Name"] = firstName;
-          if (lastName && record.fields["Last Name"] !== lastName)
-            updates["Last Name"] = lastName;
+          if (firstName && record.fields["First Name"] !== firstName) updates["First Name"] = firstName;
+          if (lastName && record.fields["Last Name"] !== lastName) updates["Last Name"] = lastName;
+          if (phone && record.fields["Phone"] !== phone) updates["Phone"] = phone;
+
+          // Optional address sync (writes only what you pass)
+          if (address1 && record.fields["Address 1"] !== address1) updates["Address 1"] = address1;
+          if (address2 && record.fields["Address 2"] !== address2) updates["Address 2"] = address2;
+          if (city && record.fields["City"] !== city) updates["City"] = city;
+          if (province && record.fields["Province/State"] !== province) updates["Province/State"] = province;
+          if (zip && record.fields["Postal Code"] !== zip) updates["Postal Code"] = zip;
+          if (country && record.fields["Country"] !== country) updates["Country"] = country;
+
           if (Object.keys(updates).length) {
-            record = await updateOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, record.id, updates);
+            // Use same table identifier across all calls for continuity
+            record = await updateOne("Customers", record.id, updates);
           }
 
           return send(200, {
@@ -96,8 +109,14 @@ export default withShopifyProxy(
           "First Name": firstName || undefined,
           "Last Name": lastName || undefined,
           "Phone": phone || undefined,
+          "Address 1": address1 || undefined,
+          "Address 2": address2 || undefined,
+          "City": city || undefined,
+          "Province/State": province || undefined,
+          "Postal Code": zip || undefined,
+          "Country": country || undefined,
           "Shop Domain": shop,
-          "Source": "Netlify Backend -> create-customer (Existing Shopify User)"
+          "Source": "Netlify Backend → create-airtable-customer (Logged-in)"
         });
 
         return send(200, {
@@ -109,9 +128,10 @@ export default withShopifyProxy(
         });
       }
 
+      // 2) No Shopify user — create a bare record
       const anon = await createOne("Customers", {
         "Shop Domain": shop,
-        "Creation Source": "Netlify Backend -> create-customer (Anonymous Shopify User)"
+        "Source": "Netlify Backend → create-airtable-customer (Anonymous)"
       });
 
       return send(200, {
@@ -121,12 +141,21 @@ export default withShopifyProxy(
         airtableId: anon.id,
         fields: anon.fields
       });
-    } catch (e) {
-      return send(500, { ok: false, error: "server_error", message: String(e) });
+    } catch (err) {
+      // Surface verbose errors from airtable.js (status, url, method, responseText)
+      return send(err.status || 500, {
+        ok: false,
+        error: "server_error",
+        message: err.message,
+        status: err.status,
+        url: err.url,
+        method: err.method,
+        responseText: err.responseText
+      });
     }
   },
   {
-    methods: ["GET", "POST"], 
+    methods: ["GET", "POST"],
     allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
     requireShop: true
   }
