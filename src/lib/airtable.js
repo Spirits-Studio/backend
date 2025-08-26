@@ -23,8 +23,12 @@ export async function createOne(table, fields) {
     headers: { ...auth, 'Content-Type': 'application/json' },
     body: JSON.stringify({ records: [{ fields }] })
   });
-  if (!r.ok) throw new Error(`Airtable create failed: ${await r.text()}`);
+  if (!r.ok) {
+    console.log("airtable createOne failed", await r.text())
+    throw new Error(`Airtable create failed: ${await r.text()}`);
+  }
   const j = await r.json();
+  console.log("airtable createOne response", j)
   return j.records[0];
 }
 
