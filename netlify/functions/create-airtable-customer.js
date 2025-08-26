@@ -96,7 +96,7 @@ export default withShopifyProxy(
           "First Name": firstName || undefined,
           "Last Name": lastName || undefined,
           "Phone": phone || undefined,
-          "Store Domain": shop,
+          "Shop Domain": shop,
           "Source": "Netlify Backend -> create-customer (Existing Shopify User)"
         });
 
