@@ -77,7 +77,7 @@ export default withShopifyProxy(
           if (lastName && record.fields["Last Name"] !== lastName)
             updates["Last Name"] = lastName;
           if (Object.keys(updates).length) {
-            record = await updateOne("Customers", record.id, updates);
+            record = await updateOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, record.id, updates);
           }
 
           return send(200, {
