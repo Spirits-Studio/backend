@@ -1,4 +1,3 @@
-// netlify/functions/get-vistaCreate-token.js
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 
 function send(status, obj, extraHeaders = {}) {

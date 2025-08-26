@@ -1,4 +1,3 @@
-// netlify/functions/get-zakeke-token.js
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 
 let cache = { token: null, exp: 0 };
