@@ -49,15 +49,7 @@ export default withShopifyProxy(
       const firstName = pick(qs, body, "first_name", "firstName");
       const lastName = pick(qs, body, "last_name", "lastName");
       const phone = pick(qs, body, "phone", "customer_phone", "customerPhone");
-
-      // Optional address info (usually from Liquid if you choose to pass it)
-      const address1 = pick(qs, body, "address1");
-      const address2 = pick(qs, body, "address2");
-      const city = pick(qs, body, "city");
-      const province = pick(qs, body, "province", "region");
-      const zip = pick(qs, body, "zip", "postal_code", "postcode");
-      const country = pick(qs, body, "country");
-
+      
       // 1) If we have a Shopify user (id or email): find or create
       if (customerId || email) {
         let record = null;
@@ -80,14 +72,6 @@ export default withShopifyProxy(
           if (lastName && record.fields["Last Name"] !== lastName) updates["Last Name"] = lastName;
           if (phone && record.fields["Phone"] !== phone) updates["Phone"] = phone;
 
-          // Optional address sync (writes only what you pass)
-          if (address1 && record.fields["Address 1"] !== address1) updates["Address 1"] = address1;
-          if (address2 && record.fields["Address 2"] !== address2) updates["Address 2"] = address2;
-          if (city && record.fields["City"] !== city) updates["City"] = city;
-          if (province && record.fields["Province/State"] !== province) updates["Province/State"] = province;
-          if (zip && record.fields["Postal Code"] !== zip) updates["Postal Code"] = zip;
-          if (country && record.fields["Country"] !== country) updates["Country"] = country;
-
           if (Object.keys(updates).length) {
             // Use same table identifier across all calls for continuity
             record = await updateOne("Customers", record.id, updates);
@@ -109,14 +93,8 @@ export default withShopifyProxy(
           "First Name": firstName || undefined,
           "Last Name": lastName || undefined,
           "Phone": phone || undefined,
-          "Address 1": address1 || undefined,
-          "Address 2": address2 || undefined,
-          "City": city || undefined,
-          "Province/State": province || undefined,
-          "Postal Code": zip || undefined,
-          "Country": country || undefined,
           "Shop Domain": shop,
-          "Source": "Netlify Backend → create-airtable-customer (Logged-in)"
+          "Creation Source": "Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
         });
 
         return send(200, {
@@ -131,7 +109,7 @@ export default withShopifyProxy(
       // 2) No Shopify user — create a bare record
       const anon = await createOne("Customers", {
         "Shop Domain": shop,
-        "Source": "Netlify Backend → create-airtable-customer (Anonymous)"
+        "Creation Source": "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
       });
 
       return send(200, {
