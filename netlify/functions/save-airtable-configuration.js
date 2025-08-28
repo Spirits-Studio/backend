@@ -51,7 +51,7 @@ export default withShopifyProxy(
       let record = null;
 
       const created = await createOne(process.env.AIRTABLE_SAVED_CONFIGS_TABLE_ID, {
-        "Customer": [{id: customer_id}] || undefined,
+        "Customer": [customer_id] || undefined,
         "Confiurator Tool": {name: "Zakeke"},
         "Alcohol Selection": {name: liquor} || undefined,
         "Bottle Selection": {name: bottle}  || undefined,
