@@ -52,13 +52,13 @@ export default withShopifyProxy(
 
       const created = await createOne(process.env.AIRTABLE_SAVED_CONFIGS_TABLE_ID, {
         "Customer": [customer_id] || undefined,
-        "Configurator Tool": {'name': "Zakeke"},
-        "Alcohol Selection": {'name': liquor} || undefined,
-        "Bottle Selection": {'name': bottle}  || undefined,
-        "Liquid Selection": {'name': liquid}  || undefined,
-        "Closure Selection": {'name': closure} || undefined,
-        "Wax Selection": {'name': wax} || undefined,
-        "Label Design Tool": {'name': "VistaCreate"},
+        "Configurator Tool": "Zakeke",
+        "Alcohol Selection": liquor || undefined,
+        "Bottle Selection": bottle  || undefined,
+        "Liquid Selection": liquid  || undefined,
+        "Closure Selection": closure || undefined,
+        "Wax Selection": wax || undefined,
+        "Label Design Tool": "VistaCreate",
         "Front Label Design ID": front_label.vista_create_id || undefined,
         "Front Label Zakeke ID": front_label.zakeke_id || undefined,
         "Front Label S3 Link": front_label.s3_link || undefined,
@@ -67,7 +67,7 @@ export default withShopifyProxy(
         "Back Label S3 Link": back_label.s3_link || undefined,
         "Internal SKU": internal_sku || undefined,
         "Shopify Variant ID": shopify_variant_id || undefined,
-        "Creation Source": {'name': "Shopify -> Netlify Backend (save-airtable-configuration)"}
+        "Creation Source": "Shopify -> Netlify Backend (save-airtable-configuration)"
       });
 
       return send(200, {
