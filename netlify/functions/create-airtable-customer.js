@@ -56,11 +56,11 @@ export default withShopifyProxy(
         let matchedBy = null;
 
         if (customerId) {
-          record = await findOneBy("Customers", "Shopify ID", customerId);
+          record = await findOneBy(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, "Shopify ID", customerId);
           matchedBy = record ? "shopify_id" : null;
         }
         if (!record && email) {
-          record = await findOneBy("Customers", "Email", email);
+          record = await findOneBy(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, "Email", email);
           matchedBy = record ? "email" : matchedBy;
         }
 
@@ -74,7 +74,7 @@ export default withShopifyProxy(
 
           if (Object.keys(updates).length) {
             // Use same table identifier across all calls for continuity
-            record = await updateOne("Customers", record.id, updates);
+            record = await updateOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, record.id, updates);
           }
 
           return send(200, {
@@ -87,7 +87,7 @@ export default withShopifyProxy(
         }
 
         // Not found — create
-        const created = await createOne("Customers", {
+        const created = await createOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, {
           "Shopify ID": customerId || undefined,
           "Email": email || undefined,
           "First Name": firstName || undefined,
@@ -108,7 +108,7 @@ export default withShopifyProxy(
       }
 
       // 2) No Shopify user — create a bare record
-      const anon = await createOne("Customers", {
+      const anon = await createOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, {
         "Shop Domain": shop,
         "Creation Source": "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
       });
