@@ -36,7 +36,8 @@ export default withShopifyProxy(
     try {
       const body = await parseBody(arg, method, isV2) || {};
 
-      // Prefer HMAC-signed query params from the App Proxy URL; fall back to body.
+      console.log("body", body)
+      
       const customer_id = body.customer_id || null;
       const shopify_variant_id = body.shopify_variant_id || null;
       const internal_sku = body.internal_sku || null;

@@ -93,7 +93,7 @@ export default withShopifyProxy(
           "First Name": firstName || undefined,
           "Last Name": lastName || undefined,
           "Phone": phone || undefined,
-          "Source": {'name': 'Shopify'},
+          "Source": Shopify,
           "Shop Domain": shop,
           "Creation Source": "Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
         });
