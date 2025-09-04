@@ -1,13 +1,18 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 
-let cache = { token: null, exp: 0 };
+// Cache tokens per variant (e.g., default vs S2S)
+// Keyed by accessType uppercased or 'DEFAULT'
+const cache = {};
 
 function send(status, obj, extraHeaders = {}) {
   return new Response(JSON.stringify(obj), {
     status,
     headers: {
       "Content-Type": "application/json",
-      "Cache-Control": "no-store",
+      // Extra no-cache headers to defeat aggressive proxies
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      Pragma: "no-cache",
+      Expires: "0",
       ...extraHeaders
     }
   });
@@ -15,9 +20,11 @@ function send(status, obj, extraHeaders = {}) {
 
 async function fetchZakekeToken({ accessType } = {}) {
   const now = Date.now();
-  if (cache.token && cache.exp > now) {
-    const ttl = Math.max(0, Math.floor((cache.exp - now) / 1000));
-    return { token: cache.token, expires_in: ttl, cached: true };
+  const key = (accessType || "DEFAULT").toUpperCase();
+  const entry = cache[key];
+  if (entry && entry.token && entry.exp > now) {
+    const ttl = Math.max(0, Math.floor((entry.exp - now) / 1000));
+    return { token: entry.token, expires_in: ttl, cached: true };
   }
 
   const url = "https://api.zakeke.com/token";
@@ -40,7 +47,11 @@ async function fetchZakekeToken({ accessType } = {}) {
 
   const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
 
-  // first try: Basic auth header + grant_type in body
+  // Build base form body
+  const baseForm = new URLSearchParams({ grant_type: "client_credentials" });
+  if (accessType) baseForm.set("access_type", accessType);
+
+  // first try: Basic auth header + form body
   let res = await fetch(url, {
     method: "POST",
     headers: {
@@ -49,7 +60,7 @@ async function fetchZakekeToken({ accessType } = {}) {
       "Content-Type": "application/x-www-form-urlencoded",
       Authorization: `Basic ${credentials}`
     },
-    body: "grant_type=client_credentials"
+    body: baseForm
   });
 
   // fallback: some tenants require creds in body (no Basic)
@@ -59,6 +70,7 @@ async function fetchZakekeToken({ accessType } = {}) {
       client_id: clientId,
       client_secret: clientSecret
     });
+    if (accessType) body.set("access_type", accessType);
     res = await fetch(url, {
       method: "POST",
       headers: {
@@ -88,8 +100,8 @@ async function fetchZakekeToken({ accessType } = {}) {
     throw { status: 502, code: "zakeke_missing_fields", message: "No token/expires_in", data };
   }
 
-  cache = { token, exp: now + (expires_in - 60) * 1000 };
-  return { token, expires_in, cached: false };
+  cache[key] = { token, exp: now + Math.max(0, (expires_in - 60)) * 1000 };
+  return { token, expires_in, cached: false, accessType: key };
 }
 
 export default withShopifyProxy(
@@ -109,10 +121,13 @@ export default withShopifyProxy(
 
       console.log("get-zakeke-token hit", { path, qs });
 
-      if (refresh) cache = { token: null, exp: 0 };
+      if (refresh) {
+        // Clear all cached variants
+        Object.keys(cache).forEach(k => delete cache[k]);
+      }
       console.log("withShopifyProxy fetchZakekeToken reached")
       const { token, expires_in, cached } = await fetchZakekeToken({ accessType });
-      console.log("withShopifyProxy fetchZakekeToken successful: token", token, "expires_in", expires_in, "cached", cached)
+      console.log("withShopifyProxy fetchZakekeToken successful", { expires_in, cached, accessType });
       return send(200, { token, expiresIn: expires_in, cached, accessType: accessType || null });
 
     } catch (e) {
