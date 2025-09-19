@@ -1,28 +1,19 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import {
-  fetchZakekeToken,
-  generateVisitorCode,
-  clearZakekeTokenCache
-} from "./_lib/zakekeAuth.js";
+import { fetchZakekeToken } from "./_lib/zakekeAuth.js";
 
-function send(status, obj, extraHeaders = {}) {
-  return new Response(JSON.stringify(obj), {
+const send = (status, obj) =>
+  new Response(JSON.stringify(obj), {
     status,
     headers: {
       "Content-Type": "application/json",
-      // Extra no-cache headers to defeat aggressive proxies
       "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
       Pragma: "no-cache",
       Expires: "0",
-      ...extraHeaders
-    }
+    },
   });
-}
 
 const parseBody = async (arg, method, isV2) => {
-  if (!arg) return {};
-  if (method === "GET") return {};
-
+  if (!arg || method === "GET") return {};
   try {
     if (isV2) {
       const ct = (arg.headers.get("content-type") || "").toLowerCase();
@@ -45,7 +36,7 @@ const parseBody = async (arg, method, isV2) => {
       try { return JSON.parse(raw); } catch { return {}; }
     }
   } catch (err) {
-    console.warn("Failed to parse request body for get-zakeke-token", err);
+    console.warn("Failed to parse request body for link-zakeke-identity", err);
   }
   return {};
 };
@@ -59,21 +50,15 @@ const firstValue = (...vals) => {
 
 export default withShopifyProxy(
   async (event, { qs = {}, isV2, method }) => {
-    console.log("withShopifyProxy reached")
     try {
-      console.log("withShopifyProxy try block reached")
       const urlObj = event?.url ? new URL(event.url) : null;
       const legacyQs =
         urlObj
           ? Object.fromEntries(urlObj.searchParams.entries())
           : (event?.queryStringParameters || {});
       const mergedQs = { ...legacyQs, ...qs };
-      const path = event?.path || urlObj?.pathname;
 
       const body = await parseBody(event, method, isV2) || {};
-
-      const refresh = mergedQs.refresh === "1" || mergedQs.refresh === "true";
-      const accessType = mergedQs.access_type || body.access_type || body.accessType;
 
       const visitorcode = firstValue(
         body.visitorcode,
@@ -93,57 +78,50 @@ export default withShopifyProxy(
         mergedQs.customer_code
       );
 
-      const finalVisitorCode = visitorcode || generateVisitorCode();
-
-      console.log("get-zakeke-token hit", {
-        path,
-        qs: mergedQs,
-        hasBody: Object.keys(body).length > 0,
-        visitorcode: visitorcode ? "provided" : "generated",
-        customercode: !!customercode
-      });
-
-      if (refresh) {
-        // Clear all cached variants
-        const cleared = clearZakekeTokenCache();
-        console.log("Zakeke token cache cleared", { cleared });
+      if (!visitorcode || !customercode) {
+        return send(400, {
+          ok: false,
+          error: "missing_parameters",
+          message: "visitorcode and customercode are required to link identities",
+        });
       }
-      console.log("withShopifyProxy fetchZakekeToken reached")
-      const {
-        token,
-        expires_in,
-        cached,
-        visitorcode: responseVisitor,
-        customercode: responseCustomer
-      } = await fetchZakekeToken({
+
+      const accessType = firstValue(
+        body.access_type,
+        body.accessType,
+        mergedQs.access_type,
+        mergedQs.accessType
+      ) || "S2S";
+
+      const result = await fetchZakekeToken({
         accessType,
-        visitorcode: finalVisitorCode,
-        customercode
-      });
-      console.log("withShopifyProxy fetchZakekeToken successful", {
-        expires_in,
-        cached,
-        accessType,
-        visitorcode: responseVisitor,
-        customercode: responseCustomer
-      });
-      return send(200, {
-        token,
-        expiresIn: expires_in,
-        cached,
-        accessType: accessType || null,
-        visitorCode: responseVisitor || finalVisitorCode,
-        customerCode: responseCustomer || customercode || null
+        visitorcode,
+        customercode,
       });
 
+      return send(200, {
+        ok: true,
+        linked: true,
+        visitorCode: visitorcode,
+        customerCode: customercode,
+        token: result.token,
+        expiresIn: result.expires_in,
+        cached: result.cached,
+        accessType: result.accessType || accessType,
+      });
     } catch (e) {
-      console.log("withShopifyProxy error block reached e", e)
+      console.error("link-zakeke-identity error", e);
       return send(e.status || 502, {
+        ok: false,
         error: e.code || "server_error",
         message: e.message || String(e),
-        details: e.missing || e.data
+        details: e.missing || e.data,
       });
     }
   },
-  { methods: ["GET", "POST"], allowlist: [process.env.SHOPIFY_STORE_DOMAIN], requireShop: true }
+  {
+    methods: ["POST"],
+    allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
+    requireShop: true,
+  }
 );
