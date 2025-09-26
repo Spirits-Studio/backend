@@ -7,7 +7,71 @@ const DEFAULT_REGION = "eu-west-2";
 const DEFAULT_PREFIX = "orders";
 
 const labelDimensions = {
-  // Fill in e.g. "classic-750": { front: { width: 1200, height: 1600 }, back: {...} }
+  polo: {
+    front: { width: 110, height: 65 },
+    back: { width: 110, height: 65 }
+  },
+  outlaw: {
+    front: { width: 55, height: 95 },
+    back: { width: 55, height: 95 }
+  },
+  antica: {
+    front: { width: 110, height: 110 },
+    back: { width: 80, height: 100 }
+  },
+  manila: {
+    front: { width: 135, height: 50 },
+    back: { width: 115, height: 40 }
+  },
+  origin: {
+    front: { width: 115, height: 45 },
+    back: { width: 100, height: 45 }
+  },
+};
+
+const MM_PER_INCH = 25.4;
+
+const resolveDefaultDpi = () => {
+  const raw =
+    process.env.LABEL_RESIZE_DEFAULT_DPI ||
+    process.env.LABEL_DEFAULT_DPI ||
+    process.env.DEFAULT_LABEL_DPI;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 300;
+};
+
+const extractDpiFromMetadata = (metadata) => {
+  if (!metadata || typeof metadata.density !== "number" || metadata.density <= 0) {
+    return null;
+  }
+  if (metadata.resolutionUnit === "cm") {
+    return metadata.density * 2.54;
+  }
+  return metadata.density;
+};
+
+const toPixelsFromLength = (value, unit, dpi) => {
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const normalizedUnit = typeof unit === "string" && unit.trim()
+    ? unit.trim().toLowerCase()
+    : "mm";
+
+  if (normalizedUnit === "px" || normalizedUnit === "pixel" || normalizedUnit === "pixels") {
+    return Math.max(1, Math.round(value));
+  }
+
+  if (
+    normalizedUnit === "cm" ||
+    normalizedUnit === "centimeter" ||
+    normalizedUnit === "centimeters" ||
+    normalizedUnit === "centimetre" ||
+    normalizedUnit === "centimetres"
+  ) {
+    return Math.max(1, Math.round(((value * 10) / MM_PER_INCH) * dpi));
+  }
+
+  // Default to millimetres when unit is missing or unrecognised.
+  return Math.max(1, Math.round((value / MM_PER_INCH) * dpi));
 };
 
 const respond = (status, body) =>
@@ -294,9 +358,57 @@ const handler = async (event, { qs = {}, isV2, method }) => {
         });
       }
 
+      const widthValue = Number(dims.width);
+      const heightValue = Number(dims.height);
+      if (
+        !Number.isFinite(widthValue) ||
+        !Number.isFinite(heightValue) ||
+        widthValue <= 0 ||
+        heightValue <= 0
+      ) {
+        return respond(400, {
+          ok: false,
+          error: "invalid_dimensions",
+          message: `Invalid dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'`
+        });
+      }
+
+      let metadata;
+      try {
+        metadata = await sharp(bodyBuffer).metadata();
+      } catch (err) {
+        console.warn("upload-s3-image: failed to read image metadata", err);
+      }
+
+      const detectedDpi = extractDpiFromMetadata(metadata);
+      const dpi = detectedDpi || resolveDefaultDpi();
+      const unit = typeof dims.unit === "string" && dims.unit.trim() ? dims.unit.trim() : "mm";
+
+      const widthPx = toPixelsFromLength(widthValue, unit, dpi);
+      const heightPx = toPixelsFromLength(heightValue, unit, dpi);
+
+      if (!widthPx || !heightPx) {
+        return respond(400, {
+          ok: false,
+          error: "invalid_dimensions",
+          message: `Unable to derive pixel dimensions for bottle='${bottleKey}' and design_side='${sideKey}'`
+        });
+      }
+
+      const resizeMeta = {
+        bottle: bottleKey,
+        designSide: sideKey,
+        requested: { unit, width: widthValue, height: heightValue },
+        detectedDpi,
+        dpi,
+        usedDefaultDpi: !detectedDpi,
+        widthPx,
+        heightPx
+      };
+
       const resized = sharp(bodyBuffer)
         .rotate()
-        .resize(dims.width, dims.height, { fit: "cover" });
+        .resize(widthPx, heightPx, { fit: "cover" });
 
       if (originalContentType.includes("png")) {
         bodyBuffer = await resized.png().toBuffer();
@@ -312,7 +424,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
         contentType = "image/jpeg";
       }
 
-      meta.resize = { bottle: bottleKey, designSide: sideKey, ...dims, contentType };
+      meta.resize = { ...resizeMeta, contentType };
     }
 
     await s3Client.send(
