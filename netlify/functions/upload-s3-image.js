@@ -4,7 +4,6 @@ import sharp from "sharp";
 
 const DEFAULT_BUCKET = "barrel-n-bond";
 const DEFAULT_REGION = "eu-west-2";
-const DEFAULT_PREFIX = "orders";
 
 const labelDimensions = {
   polo: {
@@ -86,8 +85,6 @@ const respond = (status, body) =>
 const s3Client = new S3Client({
   region:
     process.env.S3_REGION ||
-    process.env.AWS_REGION ||
-    process.env.AWS_DEFAULT_REGION ||
     DEFAULT_REGION
 });
 
@@ -269,8 +266,6 @@ const handler = async (event, { qs = {}, isV2, method }) => {
 
     const bucket =
       process.env.S3_BUCKET ||
-      process.env.VISTACREATE_S3_BUCKET ||
-      process.env.ASSETS_BUCKET ||
       DEFAULT_BUCKET;
 
     let key = "";
@@ -287,26 +282,16 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       }
       key = `sessions/${sessionId}/${designSide}_label`;
       meta.sessionId = sessionId;
+
     } else if (stage === "order") {
       key = `orders/${orderId}/${designSide}_label`;
+
     } else {
-      const prefixOverride =
-        normalizePrefix(qs.file_path || qs.filePath || qs.prefix || qs.folder);
-
-      const envPrefixRaw =
-        process.env.S3_PREFIX ||
-        process.env.VISTACREATE_S3_PREFIX ||
-        DEFAULT_PREFIX;
-      const envPrefix = normalizePrefix(envPrefixRaw) || DEFAULT_PREFIX;
-      const basePrefix = prefixOverride || envPrefix;
-
-      const segments = [orderId, `${designSide}_label`];
-      if (basePrefix) segments.unshift(basePrefix);
-      key = segments.join("/");
-
-      meta.prefixOverride = prefixOverride;
-      meta.envPrefix = envPrefix;
-      meta.basePrefix = basePrefix;
+      return respond(400, {
+        ok: false,
+        error: "unknown_stage",
+        message: `Failed to upload asset to S3 because of unknown/missing stage: ${stage})`
+      });
     }
 
     meta.key = key;
@@ -434,14 +419,12 @@ const handler = async (event, { qs = {}, isV2, method }) => {
         Key: key,
         Body: bodyBuffer,
         ContentType: contentType,
-        ACL: process.env.S3_ACL || process.env.VISTACREATE_S3_ACL || "public-read"
+        ACL: process.env.S3_ACL || "public-read"
       })
     );
 
     const regionParam =
       process.env.S3_REGION ||
-      process.env.AWS_REGION ||
-      process.env.AWS_DEFAULT_REGION ||
       DEFAULT_REGION;
     const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
     console.log("upload-s3-image: uploaded to S3", { ...meta, region: regionParam });
