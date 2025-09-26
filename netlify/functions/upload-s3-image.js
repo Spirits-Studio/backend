@@ -188,6 +188,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
 
   try {
     const body = await parseBody(event, isV2);
+    console.log("body", body)
 
     const downloadLink =
       body.download_link ||
