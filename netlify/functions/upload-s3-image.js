@@ -30,15 +30,6 @@ const labelDimensions = {
 
 const MM_PER_INCH = 25.4;
 
-const resolveDefaultDpi = () => {
-  const raw =
-    process.env.LABEL_RESIZE_DEFAULT_DPI ||
-    process.env.LABEL_DEFAULT_DPI ||
-    process.env.DEFAULT_LABEL_DPI;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 300;
-};
-
 const extractDpiFromMetadata = (metadata) => {
   if (!metadata || typeof metadata.density !== "number" || metadata.density <= 0) {
     return null;
@@ -367,7 +358,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       }
 
       const detectedDpi = extractDpiFromMetadata(metadata);
-      const dpi = detectedDpi || resolveDefaultDpi();
+      const dpi = detectedDpi || 150;
       const unit = typeof dims.unit === "string" && dims.unit.trim() ? dims.unit.trim() : "mm";
 
       const widthPx = toPixelsFromLength(widthValue, unit, dpi);
