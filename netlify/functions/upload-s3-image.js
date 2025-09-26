@@ -1,9 +1,14 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import sharp from "sharp";
 
 const DEFAULT_BUCKET = "barrel-n-bond";
 const DEFAULT_REGION = "eu-west-2";
 const DEFAULT_PREFIX = "orders";
+
+const labelDimensions = {
+  // Fill in e.g. "classic-750": { front: { width: 1200, height: 1600 }, back: {...} }
+};
 
 const respond = (status, body) =>
   new Response(JSON.stringify(body), {
@@ -71,21 +76,42 @@ const parseBody = async (arg, isV2) => {
   }
 };
 
-const sanitizeOrderId = (value) => {
+const sanitizeIdentifier = (value) => {
   if (!value) return "";
   return String(value).replace(/\?.*$/, "").trim();
 };
 
-const normalizeStage = (value) => {
+const normalizePrefix = (value) => {
   if (value === undefined || value === null) return null;
   const trimmed = String(value).trim();
   if (!trimmed) return null;
   const stripped = trimmed.replace(/^\/+|\/+$/g, "");
-  const parts = stripped
-    .split('/')
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
-  return parts.length ? parts.join('/') : null;
+  const parts = stripped.split("/").map((part) => part.trim()).filter(Boolean);
+  return parts.length ? parts.join("/") : null;
+};
+
+const normalizeStage = (value) => {
+  if (!value) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === "session" || normalized === "sessions") return "session";
+  if (normalized === "order" || normalized === "orders") return "order";
+  return null;
+};
+
+const normalizeBottle = (value) => {
+  if (!value) return "";
+  return String(value).trim().toLowerCase();
+};
+
+const toBoolean = (value) => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    return ["1", "true", "yes", "on"].includes(normalized);
+  }
+  return false;
 };
 
 const handler = async (event, { qs = {}, isV2, method }) => {
@@ -111,13 +137,28 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       body.order_id_raw ||
       body.orderID;
 
+    const sessionIdRaw =
+      body.session_id ||
+      body.sessionId ||
+      qs.session_id ||
+      qs.sessionId;
+
     const designSideRaw =
       body.design_side ||
       body.designSide ||
       body.design ||
       body.side;
 
-    console.log("upload-s3-image: request validated", { method });
+    const stage = normalizeStage(qs.stage || body.stage);
+    const bottleKey = normalizeBottle(qs.bottle || body.bottle);
+    const shouldResize = toBoolean(qs.resize ?? body.resize);
+
+    console.log("upload-s3-image: request validated", {
+      method,
+      stage,
+      shouldResize,
+      bottle: bottleKey
+    });
 
     if (!downloadLink || typeof downloadLink !== "string") {
       return respond(400, {
@@ -127,7 +168,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       });
     }
 
-    if (!orderIdRaw || typeof orderIdRaw !== "string") {
+    if (stage !== "session" && (!orderIdRaw || typeof orderIdRaw !== "string")) {
       return respond(400, {
         ok: false,
         error: "missing_order_id",
@@ -143,8 +184,8 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       });
     }
 
-    const orderId = sanitizeOrderId(orderIdRaw);
-    if (!orderId) {
+    const orderId = sanitizeIdentifier(orderIdRaw);
+    if (stage !== "session" && !orderId) {
       return respond(400, {
         ok: false,
         error: "invalid_order_id",
@@ -163,30 +204,47 @@ const handler = async (event, { qs = {}, isV2, method }) => {
 
     const bucket =
       process.env.S3_BUCKET ||
+      process.env.VISTACREATE_S3_BUCKET ||
       process.env.ASSETS_BUCKET ||
       DEFAULT_BUCKET;
 
-    const stage = normalizeStage(qs.stage);
+    let key = "";
+    const meta = { bucket, stage, orderId, designSide };
 
-    let key = ''
+    if (stage === "session") {
+      const sessionId = sanitizeIdentifier(sessionIdRaw);
+      if (!sessionId) {
+        return respond(400, {
+          ok: false,
+          error: "missing_session_id",
+          message: "stage=session requires session_id in the payload or query string"
+        });
+      }
+      key = `sessions/${sessionId}/${designSide}_label`;
+      meta.sessionId = sessionId;
+    } else if (stage === "order") {
+      key = `orders/${orderId}/${designSide}_label`;
+    } else {
+      const prefixOverride =
+        normalizePrefix(qs.file_path || qs.filePath || qs.prefix || qs.folder);
 
-    if(stage === session) {
-      key = `${stage}s/${sessionId}/${designSide}_label`;
+      const envPrefixRaw =
+        process.env.S3_PREFIX ||
+        process.env.VISTACREATE_S3_PREFIX ||
+        DEFAULT_PREFIX;
+      const envPrefix = normalizePrefix(envPrefixRaw) || DEFAULT_PREFIX;
+      const basePrefix = prefixOverride || envPrefix;
 
-    } else if(stage === order) {
-      key = `${stage}s/${orderId}/${designSide}_label`;
+      const segments = [orderId, `${designSide}_label`];
+      if (basePrefix) segments.unshift(basePrefix);
+      key = segments.join("/");
+
+      meta.prefixOverride = prefixOverride;
+      meta.envPrefix = envPrefix;
+      meta.basePrefix = basePrefix;
     }
-    
 
-    console.log("upload-s3-image: resolved s3 key", {
-      bucket,
-      prefixOverride,
-      envPrefix,
-      basePrefix: prefixPath,
-      orderId,
-      designSide,
-      key
-    });
+    meta.key = key;
 
     const assetResponse = await fetch(downloadLink);
     if (!assetResponse.ok) {
@@ -199,14 +257,63 @@ const handler = async (event, { qs = {}, isV2, method }) => {
     }
 
     const arrayBuffer = await assetResponse.arrayBuffer();
-    const bodyBuffer = Buffer.from(arrayBuffer);
+    let bodyBuffer = Buffer.from(arrayBuffer);
+    const originalContentType = (assetResponse.headers.get("content-type") || "").toLowerCase();
+    let contentType = originalContentType || "application/octet-stream";
+
     console.log("upload-s3-image: fetched asset", {
       downloadLink,
       bytes: bodyBuffer.length,
-      contentType: assetResponse.headers.get("content-type")
+      contentType: originalContentType
     });
 
-    const contentType = assetResponse.headers.get("content-type") || "image/png";
+    if (shouldResize) {
+      if (!originalContentType.startsWith("image/")) {
+        return respond(415, {
+          ok: false,
+          error: "unsupported_media_type",
+          message: "resize=true is only supported for image payloads"
+        });
+      }
+
+      if (!bottleKey) {
+        return respond(400, {
+          ok: false,
+          error: "missing_bottle",
+          message: "resize=true requires a bottle query parameter"
+        });
+      }
+
+      const sideKey = designSide.toLowerCase();
+      const dims = labelDimensions[bottleKey]?.[sideKey];
+      if (!dims) {
+        return respond(400, {
+          ok: false,
+          error: "missing_dimensions",
+          message: `No dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'`
+        });
+      }
+
+      const resized = sharp(bodyBuffer)
+        .rotate()
+        .resize(dims.width, dims.height, { fit: "cover" });
+
+      if (originalContentType.includes("png")) {
+        bodyBuffer = await resized.png().toBuffer();
+        contentType = "image/png";
+      } else if (originalContentType.includes("webp")) {
+        bodyBuffer = await resized.webp().toBuffer();
+        contentType = "image/webp";
+      } else if (originalContentType.includes("gif")) {
+        bodyBuffer = await resized.gif().toBuffer();
+        contentType = "image/gif";
+      } else {
+        bodyBuffer = await resized.jpeg({ quality: 90 }).toBuffer();
+        contentType = "image/jpeg";
+      }
+
+      meta.resize = { bottle: bottleKey, designSide: sideKey, ...dims, contentType };
+    }
 
     await s3Client.send(
       new PutObjectCommand({
@@ -214,24 +321,25 @@ const handler = async (event, { qs = {}, isV2, method }) => {
         Key: key,
         Body: bodyBuffer,
         ContentType: contentType,
-        ACL: process.env.S3_ACL || process.env.S3_ACL || "public-read"
+        ACL: process.env.S3_ACL || process.env.VISTACREATE_S3_ACL || "public-read"
       })
     );
 
     const regionParam =
       process.env.S3_REGION ||
-      process.env.S3_REGION ||
       process.env.AWS_REGION ||
       process.env.AWS_DEFAULT_REGION ||
       DEFAULT_REGION;
     const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
-    console.log("upload-s3-image: uploaded to S3", { bucket, key, region: regionParam });
+    console.log("upload-s3-image: uploaded to S3", { ...meta, region: regionParam });
 
     return respond(200, {
       ok: true,
       bucket,
       key,
-      imageUrl: publicUrl
+      imageUrl: publicUrl,
+      resized: Boolean(meta.resize),
+      contentType
     });
   } catch (error) {
     console.error("upload-s3-image failed", error);
