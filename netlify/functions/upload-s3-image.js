@@ -31,25 +31,17 @@ const labelDimensions = {
 const MM_PER_INCH = 25.4;
 
 const extractDpiFromMetadata = (metadata) => {
-  if (!metadata || typeof metadata.density !== "number" || metadata.density <= 0) {
-    return null;
-  }
-  if (metadata.resolutionUnit === "cm") {
-    return metadata.density * 2.54;
-  }
+  if (!metadata || typeof metadata.density !== "number" || metadata.density <= 0) return null;
+  if (metadata.resolutionUnit === "cm") return metadata.density * 2.54;
   return metadata.density;
 };
 
 const toPixelsFromLength = (value, unit, dpi) => {
   if (!Number.isFinite(value) || value <= 0) return null;
-  const normalizedUnit = typeof unit === "string" && unit.trim()
-    ? unit.trim().toLowerCase()
-    : "mm";
-
+  const normalizedUnit = typeof unit === "string" && unit.trim() ? unit.trim().toLowerCase() : "mm";
   if (normalizedUnit === "px" || normalizedUnit === "pixel" || normalizedUnit === "pixels") {
     return Math.max(1, Math.round(value));
   }
-
   if (
     normalizedUnit === "cm" ||
     normalizedUnit === "centimeter" ||
@@ -59,7 +51,6 @@ const toPixelsFromLength = (value, unit, dpi) => {
   ) {
     return Math.max(1, Math.round(((value * 10) / MM_PER_INCH) * dpi));
   }
-
   // Default to millimetres when unit is missing or unrecognised.
   return Math.max(1, Math.round((value / MM_PER_INCH) * dpi));
 };
@@ -73,15 +64,11 @@ const respond = (status, body) =>
     }
   });
 
-// Robust guard (kept for completeness if you ever re-enable ACLs)
 const isAclNotSupportedError = (error) => {
   if (!error || typeof error !== "object") return false;
   const code = error.Code || error.code || error.name || "";
   const msg = String(error.message || "");
-  return (
-    code === "AccessControlListNotSupported" ||
-    /AccessControlListNotSupported/i.test(msg)
-  );
+  return code === "AccessControlListNotSupported" || /AccessControlListNotSupported/i.test(msg);
 };
 
 const resolveS3Credentials = () => {
@@ -89,9 +76,7 @@ const resolveS3Credentials = () => {
   const secretAccessKey = process.env.BNB_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
   const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
-  return sessionToken
-    ? { accessKeyId, secretAccessKey, sessionToken }
-    : { accessKeyId, secretAccessKey };
+  return sessionToken ? { accessKeyId, secretAccessKey, sessionToken } : { accessKeyId, secretAccessKey };
 };
 
 const regionParam =
@@ -159,15 +144,6 @@ const sanitizeIdentifier = (value) => {
   return String(value).replace(/\?.*$/, "").trim();
 };
 
-const normalizePrefix = (value) => {
-  if (value === undefined || value === null) return null;
-  const trimmed = String(value).trim();
-  if (!trimmed) return null;
-  const stripped = trimmed.replace(/^\/+|\/+$/g, "");
-  const parts = stripped.split("/").map((part) => part.trim()).filter(Boolean);
-  return parts.length ? parts.join("/") : null;
-};
-
 const normalizeStage = (value) => {
   if (!value) return null;
   const normalized = String(value).trim().toLowerCase();
@@ -193,8 +169,6 @@ const toBoolean = (value) => {
 };
 
 // Optional ACL support (OFF by default)
-// - If you ever need ACLs for a legacy bucket, set ALLOW_S3_ACL=true and S3_ACL to a canned ACL.
-// - This still won’t add ACLs when S3_OBJECT_OWNERSHIP=BucketOwnerEnforced.
 const shouldAllowAcl = () => {
   const allow = String(process.env.ALLOW_S3_ACL || "").toLowerCase() === "true";
   const ownership = (process.env.S3_OBJECT_OWNERSHIP || "BucketOwnerEnforced").trim();
@@ -214,10 +188,7 @@ const getAclIfAllowed = () => {
 
 const handler = async (event, { qs = {}, isV2, method }) => {
   if (method !== "POST") {
-    return respond(405, {
-      ok: false,
-      error: "method_not_allowed"
-    });
+    return respond(405, { ok: false, error: "method_not_allowed" });
   }
 
   try {
@@ -225,81 +196,47 @@ const handler = async (event, { qs = {}, isV2, method }) => {
     console.log("body", body);
 
     const downloadLink =
-      body.download_link ||
-      body.downloadLink ||
-      body.download_url ||
-      body.downloadUrl;
+      body.download_link || body.downloadLink || body.download_url || body.downloadUrl;
 
     const orderIdRaw =
-      body.order_id ||
-      body.orderId ||
-      body.order_id_raw ||
-      body.orderID;
+      body.order_id || body.orderId || body.order_id_raw || body.orderID;
 
     const sessionIdRaw =
-      body.session_id ||
-      body.sessionId ||
-      qs.session_id ||
-      qs.sessionId;
+      body.session_id || body.sessionId || qs.session_id || qs.sessionId;
 
     const designSideRaw =
-      body.design_side ||
-      body.designSide ||
-      body.design ||
-      body.side;
+      body.design_side || body.designSide || body.design || body.side;
 
     const stage = normalizeStage(qs.stage || body.stage);
     const bottleKey = normalizeBottle(qs.bottle || body.bottle);
     const shouldResize = toBoolean(qs.resize ?? body.resize);
 
     console.log("upload-s3-image: request validated", {
-      method,
-      stage,
-      shouldResize,
-      bottle: bottleKey
+      method, stage, shouldResize, bottle: bottleKey
     });
 
     if (!downloadLink || typeof downloadLink !== "string") {
-      return respond(400, {
-        ok: false,
-        error: "missing_download_link",
-        message: "Expected download_link in the request payload"
-      });
+      return respond(400, { ok: false, error: "missing_download_link", message: "Expected download_link in the request payload" });
     }
-
     if (stage !== "session" && (!orderIdRaw || typeof orderIdRaw !== "string")) {
-      return respond(400, {
-        ok: false,
-        error: "missing_order_id",
-        message: "Expected order_id in the request payload"
-      });
+      return respond(400, { ok: false, error: "missing_order_id", message: "Expected order_id in the request payload" });
     }
-
     if (!designSideRaw || typeof designSideRaw !== "string") {
-      return respond(400, {
-        ok: false,
-        error: "missing_design_side",
-        message: "Expected design_side in the request payload"
-      });
+      return respond(400, { ok: false, error: "missing_design_side", message: "Expected design_side in the request payload" });
     }
 
     const orderId = sanitizeIdentifier(orderIdRaw);
     if (stage !== "session" && !orderId) {
-      return respond(400, {
-        ok: false,
-        error: "invalid_order_id",
-        message: "order_id must contain at least one valid character"
-      });
+      return respond(400, { ok: false, error: "invalid_order_id", message: "order_id must contain at least one valid character" });
     }
 
     const designSide = (designSideRaw || "").trim();
     if (!designSide) {
-      return respond(400, {
-        ok: false,
-        error: "invalid_design_side",
-        message: "design_side must contain at least one character"
-      });
+      return respond(400, { ok: false, error: "invalid_design_side", message: "design_side must contain at least one character" });
     }
+
+    // Declare bucket BEFORE using it in meta
+    const bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
 
     let key = "";
     const meta = { bucket, stage, orderId, designSide };
@@ -307,24 +244,14 @@ const handler = async (event, { qs = {}, isV2, method }) => {
     if (stage === "session") {
       const sessionId = sanitizeIdentifier(sessionIdRaw);
       if (!sessionId) {
-        return respond(400, {
-          ok: false,
-          error: "missing_session_id",
-          message: "stage=session requires session_id in the payload or query string"
-        });
+        return respond(400, { ok: false, error: "missing_session_id", message: "stage=session requires session_id in the payload or query string" });
       }
       key = `sessions/${sessionId}/${designSide}_label`;
       meta.sessionId = sessionId;
-
     } else if (stage === "order") {
       key = `orders/${orderId}/${designSide}_label`;
-
     } else {
-      return respond(400, {
-        ok: false,
-        error: "unknown_stage",
-        message: `Failed to upload asset to S3 because of unknown/missing stage: ${stage})`
-      });
+      return respond(400, { ok: false, error: "unknown_stage", message: `Failed to upload asset to S3 because of unknown/missing stage: ${stage})` });
     }
 
     meta.key = key;
@@ -345,51 +272,27 @@ const handler = async (event, { qs = {}, isV2, method }) => {
     let contentType = originalContentType || "application/octet-stream";
 
     console.log("upload-s3-image: fetched asset", {
-      downloadLink,
-      bytes: bodyBuffer.length,
-      contentType: originalContentType
+      downloadLink, bytes: bodyBuffer.length, contentType: originalContentType
     });
 
     if (shouldResize) {
       if (!originalContentType.startsWith("image/")) {
-        return respond(415, {
-          ok: false,
-          error: "unsupported_media_type",
-          message: "resize=true is only supported for image payloads"
-        });
+        return respond(415, { ok: false, error: "unsupported_media_type", message: "resize=true is only supported for image payloads" });
       }
-
       if (!bottleKey) {
-        return respond(400, {
-          ok: false,
-          error: "missing_bottle",
-          message: "resize=true requires a bottle query parameter"
-        });
+        return respond(400, { ok: false, error: "missing_bottle", message: "resize=true requires a bottle query parameter" });
       }
 
       const sideKey = designSide.toLowerCase();
       const dims = labelDimensions[bottleKey]?.[sideKey];
       if (!dims) {
-        return respond(400, {
-          ok: false,
-          error: "missing_dimensions",
-          message: `No dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'`
-        });
+        return respond(400, { ok: false, error: "missing_dimensions", message: `No dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'` });
       }
 
       const widthValue = Number(dims.width);
       const heightValue = Number(dims.height);
-      if (
-        !Number.isFinite(widthValue) ||
-        !Number.isFinite(heightValue) ||
-        widthValue <= 0 ||
-        heightValue <= 0
-      ) {
-        return respond(400, {
-          ok: false,
-          error: "invalid_dimensions",
-          message: `Invalid dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'`
-        });
+      if (!Number.isFinite(widthValue) || !Number.isFinite(heightValue) || widthValue <= 0 || heightValue <= 0) {
+        return respond(400, { ok: false, error: "invalid_dimensions", message: `Invalid dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'` });
       }
 
       let metadata;
@@ -407,27 +310,10 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       const heightPx = toPixelsFromLength(heightValue, unit, dpi);
 
       if (!widthPx || !heightPx) {
-        return respond(400, {
-          ok: false,
-          error: "invalid_dimensions",
-          message: `Unable to derive pixel dimensions for bottle='${bottleKey}' and design_side='${sideKey}'`
-        });
+        return respond(400, { ok: false, error: "invalid_dimensions", message: `Unable to derive pixel dimensions for bottle='${bottleKey}' and design_side='${sideKey}'` });
       }
 
-      const resizeMeta = {
-        bottle: bottleKey,
-        designSide: sideKey,
-        requested: { unit, width: widthValue, height: heightValue },
-        detectedDpi,
-        dpi,
-        usedDefaultDpi: !detectedDpi,
-        widthPx,
-        heightPx
-      };
-
-      const resized = sharp(bodyBuffer)
-        .rotate()
-        .resize(widthPx, heightPx, { fit: "cover" });
+      const resized = sharp(bodyBuffer).rotate().resize(widthPx, heightPx, { fit: "cover" });
 
       if (originalContentType.includes("png")) {
         bodyBuffer = await resized.png().toBuffer();
@@ -442,14 +328,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
         bodyBuffer = await resized.jpeg({ quality: 90 }).toBuffer();
         contentType = "image/jpeg";
       }
-
-      meta.resize = { ...resizeMeta, contentType };
     }
-
-    // FINAL PutObject (no ACL by default)
-    const bucket =
-      process.env.S3_BUCKET ||
-      DEFAULT_BUCKET;
 
     const putParams = {
       Bucket: bucket,
@@ -458,21 +337,14 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       ContentType: contentType
     };
 
-    // Only attach ACL if explicitly allowed and not BucketOwnerEnforced
     const maybeAcl = getAclIfAllowed();
-    if (maybeAcl) {
-      putParams.ACL = maybeAcl;
-    }
+    if (maybeAcl) putParams.ACL = maybeAcl;
 
     try {
       await s3Client.send(new PutObjectCommand(putParams));
     } catch (error) {
-      // If an ACL slipped through and bucket has ACLs disabled, retry once without ACL.
       if (putParams.ACL && isAclNotSupportedError(error)) {
-        console.warn("upload-s3-image: bucket does not support ACLs, retrying without ACL", {
-          bucket: bucket,
-          key: meta.key
-        });
+        console.warn("upload-s3-image: bucket does not support ACLs, retrying without ACL", { bucket, key: meta.key });
         delete putParams.ACL;
         await s3Client.send(new PutObjectCommand(putParams));
       } else {
@@ -488,16 +360,12 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       bucket,
       key: meta.key,
       imageUrl: publicUrl,
-      resized: Boolean(meta.resize),
+      resized: Boolean(!!putParams.widthPx && !!putParams.heightPx),
       contentType
     });
   } catch (error) {
     console.error("upload-s3-image failed", error);
-    return respond(502, {
-      ok: false,
-      error: "upload_failed",
-      message: error.message || "Failed to upload asset to S3"
-    });
+    return respond(502, { ok: false, error: "upload_failed", message: error.message || "Failed to upload asset to S3" });
   }
 };
 
