@@ -73,6 +73,17 @@ const respond = (status, body) =>
     }
   });
 
+// Robust guard (kept for completeness if you ever re-enable ACLs)
+const isAclNotSupportedError = (error) => {
+  if (!error || typeof error !== "object") return false;
+  const code = error.Code || error.code || error.name || "";
+  const msg = String(error.message || "");
+  return (
+    code === "AccessControlListNotSupported" ||
+    /AccessControlListNotSupported/i.test(msg)
+  );
+};
+
 const resolveS3Credentials = () => {
   const accessKeyId = process.env.BNB_AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.BNB_AWS_SECRET_ACCESS_KEY;
@@ -83,12 +94,14 @@ const resolveS3Credentials = () => {
     : { accessKeyId, secretAccessKey };
 };
 
+const regionParam =
+  process.env.S3_REGION ||
+  process.env.AWS_REGION ||
+  process.env.AWS_DEFAULT_REGION ||
+  DEFAULT_REGION;
+
 const s3Client = new S3Client({
-  region:
-    process.env.S3_REGION ||
-    process.env.AWS_REGION ||
-    process.env.AWS_DEFAULT_REGION ||
-    DEFAULT_REGION,
+  region: regionParam,
   credentials: resolveS3Credentials()
 });
 
@@ -179,6 +192,26 @@ const toBoolean = (value) => {
   return false;
 };
 
+// Optional ACL support (OFF by default)
+// - If you ever need ACLs for a legacy bucket, set ALLOW_S3_ACL=true and S3_ACL to a canned ACL.
+// - This still won’t add ACLs when S3_OBJECT_OWNERSHIP=BucketOwnerEnforced.
+const shouldAllowAcl = () => {
+  const allow = String(process.env.ALLOW_S3_ACL || "").toLowerCase() === "true";
+  const ownership = (process.env.S3_OBJECT_OWNERSHIP || "BucketOwnerEnforced").trim();
+  return allow && ownership !== "BucketOwnerEnforced";
+};
+
+const getAclIfAllowed = () => {
+  if (!shouldAllowAcl()) return null;
+  const acl =
+    process.env.S3_ACL ||
+    process.env.VISTACREATE_S3_ACL ||
+    process.env.DEFAULT_S3_ACL ||
+    "none";
+  if (String(acl).toLowerCase() === "none") return null;
+  return acl;
+};
+
 const handler = async (event, { qs = {}, isV2, method }) => {
   if (method !== "POST") {
     return respond(405, {
@@ -189,7 +222,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
 
   try {
     const body = await parseBody(event, isV2);
-    console.log("body", body)
+    console.log("body", body);
 
     const downloadLink =
       body.download_link ||
@@ -267,10 +300,6 @@ const handler = async (event, { qs = {}, isV2, method }) => {
         message: "design_side must contain at least one character"
       });
     }
-
-    const bucket =
-      process.env.S3_BUCKET ||
-      DEFAULT_BUCKET;
 
     let key = "";
     const meta = { bucket, stage, orderId, designSide };
@@ -417,26 +446,47 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       meta.resize = { ...resizeMeta, contentType };
     }
 
-    await s3Client.send(
-      new PutObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        Body: bodyBuffer,
-        ContentType: contentType,
-        ACL: process.env.S3_ACL || "public-read"
-      })
-    );
+    // FINAL PutObject (no ACL by default)
+    const bucket =
+      process.env.S3_BUCKET ||
+      DEFAULT_BUCKET;
 
-    const regionParam =
-      process.env.S3_REGION ||
-      DEFAULT_REGION;
-    const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
+    const putParams = {
+      Bucket: bucket,
+      Key: meta.key,
+      Body: bodyBuffer,
+      ContentType: contentType
+    };
+
+    // Only attach ACL if explicitly allowed and not BucketOwnerEnforced
+    const maybeAcl = getAclIfAllowed();
+    if (maybeAcl) {
+      putParams.ACL = maybeAcl;
+    }
+
+    try {
+      await s3Client.send(new PutObjectCommand(putParams));
+    } catch (error) {
+      // If an ACL slipped through and bucket has ACLs disabled, retry once without ACL.
+      if (putParams.ACL && isAclNotSupportedError(error)) {
+        console.warn("upload-s3-image: bucket does not support ACLs, retrying without ACL", {
+          bucket: bucket,
+          key: meta.key
+        });
+        delete putParams.ACL;
+        await s3Client.send(new PutObjectCommand(putParams));
+      } else {
+        throw error;
+      }
+    }
+
+    const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(meta.key)}`;
     console.log("upload-s3-image: uploaded to S3", { ...meta, region: regionParam });
 
     return respond(200, {
       ok: true,
       bucket,
-      key,
+      key: meta.key,
       imageUrl: publicUrl,
       resized: Boolean(meta.resize),
       contentType
