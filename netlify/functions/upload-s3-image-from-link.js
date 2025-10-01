@@ -109,7 +109,7 @@ const parseBody = async (arg, isV2) => {
         return {};
       }
     } catch (err) {
-      console.warn("upload-s3-image: failed to parse v2 body", err);
+      console.warn("upload-s3-image-from-link: failed to parse v2 body", err);
       return {};
     }
   }
@@ -123,7 +123,7 @@ const parseBody = async (arg, isV2) => {
     try {
       body = Buffer.from(body, "base64").toString("utf8");
     } catch (err) {
-      console.warn("upload-s3-image: failed to decode base64 body", err);
+      console.warn("upload-s3-image-from-link: failed to decode base64 body", err);
     }
   }
 
@@ -134,7 +134,7 @@ const parseBody = async (arg, isV2) => {
     }
     return JSON.parse(body);
   } catch (err) {
-    console.warn("upload-s3-image: unsupported body format", err);
+    console.warn("upload-s3-image-from-link: unsupported body format", err);
     return {};
   }
 };
@@ -211,7 +211,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
     const bottleKey = normalizeBottle(qs.bottle || body.bottle);
     const shouldResize = toBoolean(qs.resize ?? body.resize);
 
-    console.log("upload-s3-image: request validated", {
+    console.log("upload-s3-image-from-link: request validated", {
       method, stage, shouldResize, bottle: bottleKey
     });
 
@@ -271,7 +271,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
     const originalContentType = (assetResponse.headers.get("content-type") || "").toLowerCase();
     let contentType = originalContentType || "application/octet-stream";
 
-    console.log("upload-s3-image: fetched asset", {
+    console.log("upload-s3-image-from-link: fetched asset", {
       downloadLink, bytes: bodyBuffer.length, contentType: originalContentType
     });
 
@@ -299,7 +299,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       try {
         metadata = await sharp(bodyBuffer).metadata();
       } catch (err) {
-        console.warn("upload-s3-image: failed to read image metadata", err);
+        console.warn("upload-s3-image-from-link: failed to read image metadata", err);
       }
 
       const detectedDpi = extractDpiFromMetadata(metadata);
@@ -344,7 +344,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       await s3Client.send(new PutObjectCommand(putParams));
     } catch (error) {
       if (putParams.ACL && isAclNotSupportedError(error)) {
-        console.warn("upload-s3-image: bucket does not support ACLs, retrying without ACL", { bucket, key: meta.key });
+        console.warn("upload-s3-image-from-link: bucket does not support ACLs, retrying without ACL", { bucket, key: meta.key });
         delete putParams.ACL;
         await s3Client.send(new PutObjectCommand(putParams));
       } else {
@@ -353,7 +353,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
     }
 
     const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(meta.key)}`;
-    console.log("upload-s3-image: uploaded to S3", { ...meta, region: regionParam });
+    console.log("upload-s3-image-from-link: uploaded to S3", { ...meta, region: regionParam });
 
     return respond(200, {
       ok: true,
@@ -364,7 +364,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       contentType
     });
   } catch (error) {
-    console.error("upload-s3-image failed", error);
+    console.error("upload-s3-image-from-link failed", error);
     return respond(502, { ok: false, error: "upload_failed", message: error.message || "Failed to upload asset to S3" });
   }
 };
