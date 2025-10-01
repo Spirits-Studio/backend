@@ -1,6 +1,6 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import sharp from "sharp";
+import { PDFDocument } from "pdf-lib";
 
 const DEFAULT_BUCKET = "barrel-n-bond";
 const DEFAULT_REGION = "eu-west-2";
@@ -25,35 +25,14 @@ const labelDimensions = {
   origin: {
     front: { width: 115, height: 45 },
     back: { width: 100, height: 45 }
-  },
+  }
 };
 
 const MM_PER_INCH = 25.4;
-
-const extractDpiFromMetadata = (metadata) => {
-  if (!metadata || typeof metadata.density !== "number" || metadata.density <= 0) return null;
-  if (metadata.resolutionUnit === "cm") return metadata.density * 2.54;
-  return metadata.density;
-};
-
-const toPixelsFromLength = (value, unit, dpi) => {
-  if (!Number.isFinite(value) || value <= 0) return null;
-  const normalizedUnit = typeof unit === "string" && unit.trim() ? unit.trim().toLowerCase() : "mm";
-  if (normalizedUnit === "px" || normalizedUnit === "pixel" || normalizedUnit === "pixels") {
-    return Math.max(1, Math.round(value));
-  }
-  if (
-    normalizedUnit === "cm" ||
-    normalizedUnit === "centimeter" ||
-    normalizedUnit === "centimeters" ||
-    normalizedUnit === "centimetre" ||
-    normalizedUnit === "centimetres"
-  ) {
-    return Math.max(1, Math.round(((value * 10) / MM_PER_INCH) * dpi));
-  }
-  // Default to millimetres when unit is missing or unrecognised.
-  return Math.max(1, Math.round((value / MM_PER_INCH) * dpi));
-};
+const PDF_POINTS_PER_INCH = 72;
+const BLEED_PER_SIDE_MM = 2;
+const BLEED_TOTAL_MM = BLEED_PER_SIDE_MM * 2;
+const DIMENSION_TOLERANCE_MM = Number(process.env.LABEL_DIMENSION_TOLERANCE_MM ?? 0.3);
 
 const respond = (status, body) =>
   new Response(JSON.stringify(body), {
@@ -90,55 +69,6 @@ const s3Client = new S3Client({
   credentials: resolveS3Credentials()
 });
 
-const parseBody = async (arg, isV2) => {
-  if (!arg) return {};
-
-  if (isV2) {
-    const ct = (arg.headers.get("content-type") || "").toLowerCase();
-    try {
-      if (ct.includes("application/json")) return await arg.json();
-      if (ct.includes("application/x-www-form-urlencoded")) {
-        const form = await arg.formData();
-        return Object.fromEntries([...form.entries()]);
-      }
-      const text = await arg.text();
-      if (!text) return {};
-      try {
-        return JSON.parse(text);
-      } catch {
-        return {};
-      }
-    } catch (err) {
-      console.warn("upload-s3-image-from-file: failed to parse v2 body", err);
-      return {};
-    }
-  }
-
-  const rawHeaders = arg.headers || {};
-  const ct = (rawHeaders["content-type"] || rawHeaders["Content-Type"] || "").toLowerCase();
-  let body = arg.body || "";
-  if (!body) return {};
-
-  if (arg.isBase64Encoded) {
-    try {
-      body = Buffer.from(body, "base64").toString("utf8");
-    } catch (err) {
-      console.warn("upload-s3-image-from-file: failed to decode base64 body", err);
-    }
-  }
-
-  try {
-    if (ct.includes("application/json")) return JSON.parse(body);
-    if (ct.includes("application/x-www-form-urlencoded")) {
-      return Object.fromEntries(new URLSearchParams(body));
-    }
-    return JSON.parse(body);
-  } catch (err) {
-    console.warn("upload-s3-image-from-file: unsupported body format", err);
-    return {};
-  }
-};
-
 const sanitizeIdentifier = (value) => {
   if (!value) return "";
   return String(value).replace(/\?.*$/, "").trim();
@@ -158,17 +88,6 @@ const normalizeBottle = (value) => {
   return String(value).trim().toLowerCase();
 };
 
-const toBoolean = (value) => {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") return value !== 0;
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    return ["1", "true", "yes", "on"].includes(normalized);
-  }
-  return false;
-};
-
-// Optional ACL support (OFF by default)
 const shouldAllowAcl = () => {
   const allow = String(process.env.ALLOW_S3_ACL || "").toLowerCase() === "true";
   const ownership = (process.env.S3_OBJECT_OWNERSHIP || "BucketOwnerEnforced").trim();
@@ -185,192 +104,380 @@ const getAclIfAllowed = () => {
   if (String(acl).toLowerCase() === "none") return null;
   return acl;
 };
-const handler = async () => {
-    console.log("upload-s3-image-from-file: function invoked");
-    return respond(200, { ok: true, message: "upload-s3-image-from-file function is running" });
-}
-// const handler = async (event, { qs = {}, isV2, method }) => {
-//   if (method !== "POST") {
-//     return respond(405, { ok: false, error: "method_not_allowed" });
-//   }
 
-//   try {
-//     const body = await parseBody(event, isV2);
-//     console.log("body", body);
+const ensureRequest = (arg, isV2) => {
+  if (isV2) return arg;
 
-//     const downloadLink =
-//       body.download_link || body.downloadLink || body.download_url || body.downloadUrl;
+  const headers = new Headers();
+  Object.entries(arg.headers || {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.filter(Boolean).forEach((v) => headers.append(key, v));
+    } else if (value !== undefined && value !== null) {
+      headers.append(key, String(value));
+    }
+  });
 
-//     const orderIdRaw =
-//       body.order_id || body.orderId || body.order_id_raw || body.orderID;
+  const bodyInit = arg.body
+    ? Buffer.from(arg.body, arg.isBase64Encoded ? "base64" : "utf8")
+    : undefined;
 
-//     const sessionIdRaw =
-//       body.session_id || body.sessionId || qs.session_id || qs.sessionId;
+  const url = arg.rawUrl || `https://placeholder${arg.path || "/"}`;
+  return new Request(url, {
+    method: arg.httpMethod || "POST",
+    headers,
+    body: bodyInit
+  });
+};
 
-//     const designSideRaw =
-//       body.design_side || body.designSide || body.design || body.side;
+const convertToMillimetres = (value, unit = "mm") => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) return null;
+  const normalized = unit.trim().toLowerCase();
+  if (["mm", "millimeter", "millimeters", "millimetre", "millimetres"].includes(normalized)) {
+    return numeric;
+  }
+  if (["cm", "centimeter", "centimeters", "centimetre", "centimetres"].includes(normalized)) {
+    return numeric * 10;
+  }
+  if (["in", "inch", "inches"].includes(normalized)) {
+    return numeric * MM_PER_INCH;
+  }
+  return null;
+};
 
-//     const stage = normalizeStage(qs.stage || body.stage);
-//     const bottleKey = normalizeBottle(qs.bottle || body.bottle);
-//     const shouldResize = toBoolean(qs.resize ?? body.resize);
+const getExpectedDimensionsMm = (bottleKey, sideKey) => {
+  const dims = labelDimensions[bottleKey]?.[sideKey];
+  if (!dims) return null;
 
-//     console.log("upload-s3-image-from-file: request validated", {
-//       method, stage, shouldResize, bottle: bottleKey
-//     });
+  const unit = typeof dims.unit === "string" && dims.unit.trim() ? dims.unit : "mm";
+  const widthMm = convertToMillimetres(dims.width, unit);
+  const heightMm = convertToMillimetres(dims.height, unit);
+  if (!widthMm || !heightMm) return null;
 
-//     if (!downloadLink || typeof downloadLink !== "string") {
-//       return respond(400, { ok: false, error: "missing_download_link", message: "Expected download_link in the request payload" });
-//     }
-//     if (stage !== "session" && (!orderIdRaw || typeof orderIdRaw !== "string")) {
-//       return respond(400, { ok: false, error: "missing_order_id", message: "Expected order_id in the request payload" });
-//     }
-//     if (!designSideRaw || typeof designSideRaw !== "string") {
-//       return respond(400, { ok: false, error: "missing_design_side", message: "Expected design_side in the request payload" });
-//     }
+  return {
+    widthMm: widthMm + BLEED_TOTAL_MM,
+    heightMm: heightMm + BLEED_TOTAL_MM
+  };
+};
 
-//     const orderId = sanitizeIdentifier(orderIdRaw);
-//     if (stage !== "session" && !orderId) {
-//       return respond(400, { ok: false, error: "invalid_order_id", message: "order_id must contain at least one valid character" });
-//     }
+const pointsToMillimetres = (points) => (points * MM_PER_INCH) / PDF_POINTS_PER_INCH;
 
-//     const designSide = (designSideRaw || "").trim();
-//     if (!designSide) {
-//       return respond(400, { ok: false, error: "invalid_design_side", message: "design_side must contain at least one character" });
-//     }
+const roundMm = (value) => Math.round(value * 100) / 100;
 
-//     // Declare bucket BEFORE using it in meta
-//     const bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
+const getStringField = (formData, ...keys) => {
+  for (const key of keys) {
+    const raw = formData.get(key);
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+  return null;
+};
 
-//     let key = "";
-//     const meta = { bucket, stage, orderId, designSide };
+const collectFiles = (formData) => {
+  const files = [];
+  for (const [key, value] of formData.entries()) {
+    if (typeof File !== "undefined" && value instanceof File) {
+      files.push({ key, file: value });
+    }
+  }
+  return files;
+};
 
-//     if (stage === "session") {
-//       const sessionId = sanitizeIdentifier(sessionIdRaw);
-//       if (!sessionId) {
-//         return respond(400, { ok: false, error: "missing_session_id", message: "stage=session requires session_id in the payload or query string" });
-//       }
-//       key = `sessions/${sessionId}/${designSide}_label`;
-//       meta.sessionId = sessionId;
-//     } else if (stage === "order") {
-//       key = `orders/${orderId}/${designSide}_label`;
-//     } else {
-//       return respond(400, { ok: false, error: "unknown_stage", message: `Failed to upload asset to S3 because of unknown/missing stage: ${stage})` });
-//     }
+const handler = async (arg, { qs = {}, isV2, method }) => {
+  if (method !== "POST") {
+    return respond(405, { ok: false, error: "method_not_allowed" });
+  }
 
-//     meta.key = key;
+  try {
+    const request = ensureRequest(arg, isV2);
 
-//     const assetResponse = await fetch(downloadLink);
-//     if (!assetResponse.ok) {
-//       return respond(502, {
-//         ok: false,
-//         error: "download_failed",
-//         status: assetResponse.status,
-//         message: `Failed to download asset from source URL (${assetResponse.status})`
-//       });
-//     }
+    let formData;
+    try {
+      formData = await request.formData();
+    } catch (error) {
+      console.warn("upload-s3-image-from-file: failed to parse multipart form", error);
+      return respond(415, {
+        ok: false,
+        error: "invalid_payload",
+        message: "Expected multipart/form-data payload with a PDF file"
+      });
+    }
 
-//     const arrayBuffer = await assetResponse.arrayBuffer();
-//     let bodyBuffer = Buffer.from(arrayBuffer);
-//     const originalContentType = (assetResponse.headers.get("content-type") || "").toLowerCase();
-//     let contentType = originalContentType || "application/octet-stream";
+    const files = collectFiles(formData);
+    if (!files.length) {
+      return respond(400, {
+        ok: false,
+        error: "missing_file",
+        message: "No file found in the upload payload"
+      });
+    }
 
-//     console.log("upload-s3-image-from-file: fetched asset", {
-//       downloadLink, bytes: bodyBuffer.length, contentType: originalContentType
-//     });
+    if (files.length > 1) {
+      console.warn("upload-s3-image-from-file: multiple files received, using first", {
+        count: files.length,
+        keys: files.map((entry) => entry.key)
+      });
+    }
 
-//     if (shouldResize) {
-//       if (!originalContentType.startsWith("image/")) {
-//         return respond(415, { ok: false, error: "unsupported_media_type", message: "resize=true is only supported for image payloads" });
-//       }
-//       if (!bottleKey) {
-//         return respond(400, { ok: false, error: "missing_bottle", message: "resize=true requires a bottle query parameter" });
-//       }
+    const { file } = files[0];
+    const originalFilename = file.name || "upload.pdf";
+    const providedType = (file.type || "").toLowerCase();
+    const isPdf = providedType.includes("pdf") || originalFilename.toLowerCase().endsWith(".pdf");
+    if (!isPdf) {
+      return respond(415, {
+        ok: false,
+        error: "unsupported_media_type",
+        message: "Only PDF uploads are supported"
+      });
+    }
 
-//       const sideKey = designSide.toLowerCase();
-//       const dims = labelDimensions[bottleKey]?.[sideKey];
-//       if (!dims) {
-//         return respond(400, { ok: false, error: "missing_dimensions", message: `No dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'` });
-//       }
+    const bottleKey = normalizeBottle(
+      qs.bottle ||
+        qs.bottleName ||
+        getStringField(formData, "bottle", "bottleName")
+    );
 
-//       const widthValue = Number(dims.width);
-//       const heightValue = Number(dims.height);
-//       if (!Number.isFinite(widthValue) || !Number.isFinite(heightValue) || widthValue <= 0 || heightValue <= 0) {
-//         return respond(400, { ok: false, error: "invalid_dimensions", message: `Invalid dimensions configured for bottle='${bottleKey}' and design_side='${sideKey}'` });
-//       }
+    const designSideRaw =
+      getStringField(formData, "design_side", "designSide", "design", "side") ||
+      qs.design_side ||
+      qs.designSide;
 
-//       let metadata;
-//       try {
-//         metadata = await sharp(bodyBuffer).metadata();
-//       } catch (err) {
-//         console.warn("upload-s3-image-from-file: failed to read image metadata", err);
-//       }
+    const stageRaw = qs.stage || getStringField(formData, "stage");
+    let stage = normalizeStage(stageRaw);
 
-//       const detectedDpi = extractDpiFromMetadata(metadata);
-//       const dpi = detectedDpi || 150;
-//       const unit = typeof dims.unit === "string" && dims.unit.trim() ? dims.unit.trim() : "mm";
+    const orderIdRaw =
+      getStringField(formData, "order_id", "orderId", "orderID") ||
+      qs.order_id ||
+      qs.orderId;
 
-//       const widthPx = toPixelsFromLength(widthValue, unit, dpi);
-//       const heightPx = toPixelsFromLength(heightValue, unit, dpi);
+    const sessionIdRaw =
+      getStringField(formData, "session_id", "sessionId", "sessionID") ||
+      qs.session_id ||
+      qs.sessionId;
 
-//       if (!widthPx || !heightPx) {
-//         return respond(400, { ok: false, error: "invalid_dimensions", message: `Unable to derive pixel dimensions for bottle='${bottleKey}' and design_side='${sideKey}'` });
-//       }
+    if (!stage) {
+      stage = sessionIdRaw ? "session" : normalizeStage(qs.default_stage || "");
+    }
 
-//       const resized = sharp(bodyBuffer).rotate().resize(widthPx, heightPx, { fit: "cover" });
+    if (!stage) {
+      return respond(400, {
+        ok: false,
+        error: "missing_stage",
+        message: "stage query parameter or form field is required"
+      });
+    }
 
-//       if (originalContentType.includes("png")) {
-//         bodyBuffer = await resized.png().toBuffer();
-//         contentType = "image/png";
-//       } else if (originalContentType.includes("webp")) {
-//         bodyBuffer = await resized.webp().toBuffer();
-//         contentType = "image/webp";
-//       } else if (originalContentType.includes("gif")) {
-//         bodyBuffer = await resized.gif().toBuffer();
-//         contentType = "image/gif";
-//       } else {
-//         bodyBuffer = await resized.jpeg({ quality: 90 }).toBuffer();
-//         contentType = "image/jpeg";
-//       }
-//     }
+    if (!designSideRaw) {
+      return respond(400, {
+        ok: false,
+        error: "missing_design_side",
+        message: "design_side form field is required"
+      });
+    }
 
-//     const putParams = {
-//       Bucket: bucket,
-//       Key: meta.key,
-//       Body: bodyBuffer,
-//       ContentType: contentType
-//     };
+    if (!bottleKey) {
+      return respond(400, {
+        ok: false,
+        error: "missing_bottle",
+        message: "bottle form field is required for PDF dimension validation"
+      });
+    }
 
-//     const maybeAcl = getAclIfAllowed();
-//     if (maybeAcl) putParams.ACL = maybeAcl;
+    const designSide = designSideRaw.trim();
+    if (!designSide) {
+      return respond(400, {
+        ok: false,
+        error: "invalid_design_side",
+        message: "design_side must contain at least one character"
+      });
+    }
 
-//     try {
-//       await s3Client.send(new PutObjectCommand(putParams));
-//     } catch (error) {
-//       if (putParams.ACL && isAclNotSupportedError(error)) {
-//         console.warn("upload-s3-image-from-file: bucket does not support ACLs, retrying without ACL", { bucket, key: meta.key });
-//         delete putParams.ACL;
-//         await s3Client.send(new PutObjectCommand(putParams));
-//       } else {
-//         throw error;
-//       }
-//     }
+    const designSideKey = designSide.toLowerCase();
+    const expectedDims = getExpectedDimensionsMm(bottleKey, designSideKey);
+    if (!expectedDims) {
+      return respond(400, {
+        ok: false,
+        error: "missing_dimensions",
+        message: `No label dimensions configured for bottle='${bottleKey}' and design_side='${designSideKey}'`
+      });
+    }
 
-//     const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(meta.key)}`;
-//     console.log("upload-s3-image-from-file: uploaded to S3", { ...meta, region: regionParam });
+    const orderId = sanitizeIdentifier(orderIdRaw);
+    const sessionId = sanitizeIdentifier(sessionIdRaw);
 
-//     return respond(200, {
-//       ok: true,
-//       bucket,
-//       key: meta.key,
-//       imageUrl: publicUrl,
-//       resized: Boolean(!!putParams.widthPx && !!putParams.heightPx),
-//       contentType
-//     });
-//   } catch (error) {
-//     console.error("upload-s3-image-from-file failed", error);
-//     return respond(502, { ok: false, error: "upload_failed", message: error.message || "Failed to upload asset to S3" });
-//   }
-// };
+    if (stage === "session" && !sessionId) {
+      return respond(400, {
+        ok: false,
+        error: "missing_session_id",
+        message: "stage=session requires session_id in the request"
+      });
+    }
+
+    if (stage === "order" && !orderId) {
+      return respond(400, {
+        ok: false,
+        error: "missing_order_id",
+        message: "stage=order requires order_id in the request"
+      });
+    }
+
+    const fileArrayBuffer = await file.arrayBuffer();
+    const fileBuffer = Buffer.from(fileArrayBuffer);
+    if (!fileBuffer.length) {
+      return respond(400, {
+        ok: false,
+        error: "empty_file",
+        message: "Uploaded file is empty"
+      });
+    }
+
+    let pdfDoc;
+    try {
+      pdfDoc = await PDFDocument.load(fileBuffer, { ignoreEncryption: true });
+    } catch (error) {
+      console.warn("upload-s3-image-from-file: failed to parse PDF", error);
+      return respond(415, {
+        ok: false,
+        error: "invalid_pdf",
+        message: "Uploaded file is not a readable PDF"
+      });
+    }
+
+    const pageCount = pdfDoc.getPageCount();
+    if (pageCount !== 1) {
+      return respond(422, {
+        ok: false,
+        error: "invalid_page_count",
+        message: "PDF must contain exactly one page"
+      });
+    }
+
+    const [firstPage] = pdfDoc.getPages();
+    const { width: widthPts, height: heightPts } = firstPage.getSize();
+
+    const actualWidthMm = pointsToMillimetres(widthPts);
+    const actualHeightMm = pointsToMillimetres(heightPts);
+
+    const diffWidth = Math.abs(actualWidthMm - expectedDims.widthMm);
+    const diffHeight = Math.abs(actualHeightMm - expectedDims.heightMm);
+
+    const diffWidthRotated = Math.abs(actualWidthMm - expectedDims.heightMm);
+    const diffHeightRotated = Math.abs(actualHeightMm - expectedDims.widthMm);
+
+    const matchesNormal = diffWidth <= DIMENSION_TOLERANCE_MM && diffHeight <= DIMENSION_TOLERANCE_MM;
+    const matchesRotated = diffWidthRotated <= DIMENSION_TOLERANCE_MM && diffHeightRotated <= DIMENSION_TOLERANCE_MM;
+
+    if (!matchesNormal && !matchesRotated) {
+      return respond(422, {
+        ok: false,
+        error: "invalid_pdf_dimensions",
+        message: `Expected ${roundMm(expectedDims.widthMm)}mm x ${roundMm(expectedDims.heightMm)}mm (including 2mm bleed per side) but received ${roundMm(actualWidthMm)}mm x ${roundMm(actualHeightMm)}mm`
+      });
+    }
+
+    const orientation = matchesRotated ? "rotated" : "normal";
+    const contentType = providedType || "application/pdf";
+
+    const bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
+    const designKey = designSideKey.replace(/\s+/g, "_");
+    const keyBase = stage === "session" ? `sessions/${sessionId}` : `orders/${orderId}`;
+    const key = `${keyBase}/${designKey}_label.pdf`;
+
+    const metadata = {
+      "bnb-stage": stage,
+      "bnb-design-side": designKey,
+      "bnb-bottle": bottleKey,
+      "bnb-expected-width-mm": String(roundMm(expectedDims.widthMm)),
+      "bnb-expected-height-mm": String(roundMm(expectedDims.heightMm)),
+      "bnb-actual-width-mm": String(roundMm(actualWidthMm)),
+      "bnb-actual-height-mm": String(roundMm(actualHeightMm)),
+      "bnb-bleed-per-side-mm": String(BLEED_PER_SIDE_MM),
+      "bnb-page-count": String(pageCount)
+    };
+
+    if (originalFilename) {
+      metadata["bnb-original-filename"] = originalFilename.slice(-1024);
+    }
+
+    if (stage === "session") {
+      metadata["bnb-session-id"] = sessionId;
+    } else {
+      metadata["bnb-order-id"] = orderId;
+    }
+
+    const putParams = {
+      Bucket: bucket,
+      Key: key,
+      Body: fileBuffer,
+      ContentType: contentType,
+      Metadata: metadata
+    };
+
+    const maybeAcl = getAclIfAllowed();
+    if (maybeAcl) putParams.ACL = maybeAcl;
+
+    try {
+      await s3Client.send(new PutObjectCommand(putParams));
+    } catch (error) {
+      if (putParams.ACL && isAclNotSupportedError(error)) {
+        console.warn("upload-s3-image-from-file: bucket does not support ACLs, retrying without ACL", {
+          bucket,
+          key
+        });
+        delete putParams.ACL;
+        await s3Client.send(new PutObjectCommand(putParams));
+      } else {
+        throw error;
+      }
+    }
+
+    const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
+    console.log("upload-s3-image-from-file: uploaded PDF", {
+      bucket,
+      key,
+      stage,
+      orderId,
+      sessionId,
+      bottle: bottleKey,
+      designSide: designKey,
+      orientation,
+      expected: expectedDims,
+      actual: {
+        widthMm: roundMm(actualWidthMm),
+        heightMm: roundMm(actualHeightMm)
+      }
+    });
+
+    return respond(200, {
+      ok: true,
+      bucket,
+      key,
+      url: publicUrl,
+      imageUrl: publicUrl,
+      contentType,
+      sizeBytes: fileBuffer.length,
+      orientation,
+      expectedDimensionsMm: {
+        width: roundMm(expectedDims.widthMm),
+        height: roundMm(expectedDims.heightMm)
+      },
+      actualDimensionsMm: {
+        width: roundMm(actualWidthMm),
+        height: roundMm(actualHeightMm)
+      },
+      bleedPerSideMm: BLEED_PER_SIDE_MM
+    });
+  } catch (error) {
+    console.error("upload-s3-image-from-file failed", error);
+    return respond(502, {
+      ok: false,
+      error: "upload_failed",
+      message: error.message || "Failed to upload asset to S3"
+    });
+  }
+};
 
 export default withShopifyProxy(handler, {
   methods: ["POST"],
