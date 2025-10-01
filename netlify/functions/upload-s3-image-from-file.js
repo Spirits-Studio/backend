@@ -185,19 +185,31 @@ const collectFiles = (formData) => {
   return files;
 };
 
+const logContext = (overrides = {}) => ({
+  function: "upload-s3-image-from-file",
+  ...overrides
+});
+
 const handler = async (arg, { qs = {}, isV2, method }) => {
   if (method !== "POST") {
+    console.warn("upload-s3-image-from-file: rejected non-POST request", logContext({ method }));
     return respond(405, { ok: false, error: "method_not_allowed" });
   }
 
   try {
     const request = ensureRequest(arg, isV2);
 
+    console.log("upload-s3-image-from-file: parsing incoming form-data", logContext({
+      method,
+      isV2,
+      queryKeys: Object.keys(qs)
+    }));
+
     let formData;
     try {
       formData = await request.formData();
     } catch (error) {
-      console.warn("upload-s3-image-from-file: failed to parse multipart form", error);
+      console.error("upload-s3-image-from-file: failed to parse multipart form", logContext({ error: error.message }));
       return respond(415, {
         ok: false,
         error: "invalid_payload",
@@ -207,6 +219,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
 
     const files = collectFiles(formData);
     if (!files.length) {
+      console.warn("upload-s3-image-from-file: no files provided", logContext());
       return respond(400, {
         ok: false,
         error: "missing_file",
@@ -215,10 +228,10 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     }
 
     if (files.length > 1) {
-      console.warn("upload-s3-image-from-file: multiple files received, using first", {
+      console.warn("upload-s3-image-from-file: multiple files received, using first", logContext({
         count: files.length,
         keys: files.map((entry) => entry.key)
-      });
+      }));
     }
 
     const { file } = files[0];
@@ -226,6 +239,10 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     const providedType = (file.type || "").toLowerCase();
     const isPdf = providedType.includes("pdf") || originalFilename.toLowerCase().endsWith(".pdf");
     if (!isPdf) {
+      console.warn("upload-s3-image-from-file: rejected non-PDF upload", logContext({
+        providedType,
+        originalFilename
+      }));
       return respond(415, {
         ok: false,
         error: "unsupported_media_type",
@@ -262,6 +279,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     }
 
     if (!stage) {
+      console.warn("upload-s3-image-from-file: missing stage", logContext({ stageRaw }));
       return respond(400, {
         ok: false,
         error: "missing_stage",
@@ -270,6 +288,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     }
 
     if (!designSideRaw) {
+      console.warn("upload-s3-image-from-file: missing design_side", logContext());
       return respond(400, {
         ok: false,
         error: "missing_design_side",
@@ -278,6 +297,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     }
 
     if (!bottleKey) {
+      console.warn("upload-s3-image-from-file: missing bottle key", logContext());
       return respond(400, {
         ok: false,
         error: "missing_bottle",
@@ -287,6 +307,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
 
     const designSide = designSideRaw.trim();
     if (!designSide) {
+      console.warn("upload-s3-image-from-file: design_side empty after trim", logContext());
       return respond(400, {
         ok: false,
         error: "invalid_design_side",
@@ -297,6 +318,10 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     const designSideKey = designSide.toLowerCase();
     const expectedDims = getExpectedDimensionsMm(bottleKey, designSideKey);
     if (!expectedDims) {
+      console.warn("upload-s3-image-from-file: no configured dimensions", logContext({
+        bottleKey,
+        designSide: designSideKey
+      }));
       return respond(400, {
         ok: false,
         error: "missing_dimensions",
@@ -308,6 +333,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     const sessionId = sanitizeIdentifier(sessionIdRaw);
 
     if (stage === "session" && !sessionId) {
+      console.warn("upload-s3-image-from-file: missing session_id for session stage", logContext({ stage }));
       return respond(400, {
         ok: false,
         error: "missing_session_id",
@@ -316,6 +342,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     }
 
     if (stage === "order" && !orderId) {
+      console.warn("upload-s3-image-from-file: missing order_id for order stage", logContext({ stage }));
       return respond(400, {
         ok: false,
         error: "missing_order_id",
@@ -326,6 +353,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     const fileArrayBuffer = await file.arrayBuffer();
     const fileBuffer = Buffer.from(fileArrayBuffer);
     if (!fileBuffer.length) {
+      console.warn("upload-s3-image-from-file: uploaded PDF is empty", logContext({ originalFilename }));
       return respond(400, {
         ok: false,
         error: "empty_file",
@@ -337,7 +365,10 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     try {
       pdfDoc = await PDFDocument.load(fileBuffer, { ignoreEncryption: true });
     } catch (error) {
-      console.warn("upload-s3-image-from-file: failed to parse PDF", error);
+      console.error("upload-s3-image-from-file: failed to parse PDF", logContext({
+        originalFilename,
+        error: error.message
+      }));
       return respond(415, {
         ok: false,
         error: "invalid_pdf",
@@ -347,6 +378,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
 
     const pageCount = pdfDoc.getPageCount();
     if (pageCount !== 1) {
+      console.warn("upload-s3-image-from-file: invalid page count", logContext({ pageCount }));
       return respond(422, {
         ok: false,
         error: "invalid_page_count",
@@ -370,12 +402,28 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     const matchesRotated = diffWidthRotated <= DIMENSION_TOLERANCE_MM && diffHeightRotated <= DIMENSION_TOLERANCE_MM;
 
     if (!matchesNormal && !matchesRotated) {
+      console.warn("upload-s3-image-from-file: PDF dimensions outside tolerance", logContext({
+        actualWidthMm: roundMm(actualWidthMm),
+        actualHeightMm: roundMm(actualHeightMm),
+        expectedWidthMm: roundMm(expectedDims.widthMm),
+        expectedHeightMm: roundMm(expectedDims.heightMm),
+        toleranceMm: DIMENSION_TOLERANCE_MM
+      }));
       return respond(422, {
         ok: false,
         error: "invalid_pdf_dimensions",
         message: `Expected ${roundMm(expectedDims.widthMm)}mm x ${roundMm(expectedDims.heightMm)}mm (including 2mm bleed per side) but received ${roundMm(actualWidthMm)}mm x ${roundMm(actualHeightMm)}mm`
       });
     }
+
+    console.log("upload-s3-image-from-file: PDF dimensions validated", logContext({
+      bottleKey,
+      designSide: designSideKey,
+      stage,
+      orientation: matchesRotated ? "rotated" : "normal",
+      actualWidthMm: roundMm(actualWidthMm),
+      actualHeightMm: roundMm(actualHeightMm)
+    }));
 
     const orientation = matchesRotated ? "rotated" : "normal";
     const contentType = providedType || "application/pdf";
@@ -419,22 +467,29 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     if (maybeAcl) putParams.ACL = maybeAcl;
 
     try {
+      console.log("upload-s3-image-from-file: uploading PDF to S3", logContext({
+        bucket,
+        key,
+        sizeBytes: fileBuffer.length
+      }));
       await s3Client.send(new PutObjectCommand(putParams));
     } catch (error) {
       if (putParams.ACL && isAclNotSupportedError(error)) {
-        console.warn("upload-s3-image-from-file: bucket does not support ACLs, retrying without ACL", {
-          bucket,
-          key
-        });
+        console.warn("upload-s3-image-from-file: bucket does not support ACLs, retrying without ACL", logContext({ bucket, key }));
         delete putParams.ACL;
         await s3Client.send(new PutObjectCommand(putParams));
       } else {
+        console.error("upload-s3-image-from-file: S3 upload failed", logContext({
+          bucket,
+          key,
+          error: error.message
+        }));
         throw error;
       }
     }
 
     const publicUrl = `https://${bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
-    console.log("upload-s3-image-from-file: uploaded PDF", {
+    console.log("upload-s3-image-from-file: uploaded PDF", logContext({
       bucket,
       key,
       stage,
@@ -443,12 +498,11 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
       bottle: bottleKey,
       designSide: designKey,
       orientation,
-      expected: expectedDims,
-      actual: {
-        widthMm: roundMm(actualWidthMm),
-        heightMm: roundMm(actualHeightMm)
-      }
-    });
+      expectedWidthMm: roundMm(expectedDims.widthMm),
+      expectedHeightMm: roundMm(expectedDims.heightMm),
+      actualWidthMm: roundMm(actualWidthMm),
+      actualHeightMm: roundMm(actualHeightMm)
+    }));
 
     return respond(200, {
       ok: true,
@@ -470,7 +524,7 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
       bleedPerSideMm: BLEED_PER_SIDE_MM
     });
   } catch (error) {
-    console.error("upload-s3-image-from-file failed", error);
+    console.error("upload-s3-image-from-file failed", logContext({ error: error.message }));
     return respond(502, {
       ok: false,
       error: "upload_failed",
