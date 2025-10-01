@@ -32,7 +32,7 @@ const MM_PER_INCH = 25.4;
 const PDF_POINTS_PER_INCH = 72;
 const BLEED_PER_SIDE_MM = 2;
 const BLEED_TOTAL_MM = BLEED_PER_SIDE_MM * 2;
-const DIMENSION_TOLERANCE_MM = Number(process.env.LABEL_DIMENSION_TOLERANCE_MM ?? 0.3);
+const DIMENSION_TOLERANCE_MM = Number(process.env.LABEL_DIMENSION_TOLERANCE_MM ?? 0.5);
 
 const respond = (status, body) =>
   new Response(JSON.stringify(body), {
