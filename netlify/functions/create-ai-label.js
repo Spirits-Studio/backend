@@ -1,5 +1,5 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 import * as fs from "node:fs";
 
 async function main(arg, { qs, isV2, method, shop }) {
@@ -7,10 +7,10 @@ async function main(arg, { qs, isV2, method, shop }) {
     console.log("qs:", qs);
 
     const bottle = qs.bottle;
-    const side = qs.side;
+    const designSide = qs.designSide;
     
     console.log("bottle:", bottle);
-    console.log("side:", side);
+    console.log("designSide:", designSide);
 
     const labelDimensions = {
       Polo: {
@@ -35,28 +35,34 @@ async function main(arg, { qs, isV2, method, shop }) {
       }
     };
 
-    const width = labelDimensions[bottle]?.[side]?.width || null;
-    const height = labelDimensions[bottle]?.[side]?.height || null;
+    const width = labelDimensions[bottle]?.[designSide]?.width || null;
+    const height = labelDimensions[bottle]?.[designSide]?.height || null;
     let prompt = qs.prompt || null;
 
     if(width && height && prompt) {
       prompt += ` The output of the label dimensions are ${width}mm width and ${height}mm height, excluding a 2mm trim on all sides.`;
+      if (!process.env.GOOGLE_API_KEY) {
+        throw new Error("GOOGLE_API_KEY env var is missing");
+      }
 
-      const ai = new GoogleGenAI({});
+      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-image" });
 
-      const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash-image",
-        contents: prompt,
+      // The generative-ai SDK expects a string or a list of parts for `generateContent`.
+      const result = await model.generateContent(prompt);
+      const resp = await result.response;
+
+      console.log("AI Response metadata:", {
+        promptFeedback: resp.promptFeedback,
+        candidates: Array.isArray(resp.candidates) ? resp.candidates.length : 0,
       });
 
-      console.log("AI Response:", response);
-
-      for (const part of response.candidates[0].content.parts) {
+      const parts = (resp.candidates?.[0]?.content?.parts) || [];
+      for (const part of parts) {
         if (part.text) {
           console.log(part.text);
-
-        } else if (part.inlineData) {
-          const imageData = part.inlineData.data;
+        } else if (part.inlineData?.data) {
+          const imageData = part.inlineData.data; // base64
           const buffer = Buffer.from(imageData, "base64");
           fs.writeFileSync("gemini-native-image.png", buffer);
           console.log("Image saved as gemini-native-image.png");
