@@ -12,10 +12,20 @@ export function withShopifyProxy(
   return async (arg, extra) => {
     const isV2 = arg && typeof arg.method === "string" && !("httpMethod" in arg);
 
+    const originHeader = (() => {
+      try {
+        const h = isV2 ? arg.headers : (arg.headers || {});
+        if (typeof h?.get === 'function') return h.get('origin') || h.get('Origin') || '';
+        return h.origin || h.Origin || '';
+      } catch {
+        return '';
+      }
+    })();
+
     const respond = (status, body = "", headers = {}) =>
       new Response(typeof body === "string" ? body : JSON.stringify(body), {
         status,
-        headers: { ...corsHeaders(), ...headers },
+        headers: { ...corsHeaders(originHeader), ...headers },
       });
 
     // Method + OPTIONS guard
@@ -63,7 +73,7 @@ export function withShopifyProxy(
       if (res instanceof Response) {
         // Merge CORS headers
         const merged = new Headers(res.headers);
-        const cors = corsHeaders();
+        const cors = corsHeaders(originHeader);
         Object.keys(cors).forEach((k) => merged.set(k, cors[k]));
         const body = await res.text();
         return new Response(body, { status: res.status, headers: merged });
@@ -84,12 +94,29 @@ export function withShopifyProxy(
   };
 }
 
-function corsHeaders() {
-  return {
-    // keep it strict; your calls come via proxy on your own domain
-    "Access-Control-Allow-Origin": "https://barrelnbond.com",
-    "Access-Control-Allow-Methods": "GET,OPTIONS,POST",
-    "Access-Control-Allow-Headers": "Content-Type",
-    "Cache-Control": "no-store",
+function corsHeaders(origin) {
+  const ALLOWED_ORIGINS = new Set([
+    'https://barrelnbond.com',
+    'https://www.barrelnbond.com',
+    'https://wnbrmm-sg.myshopify.com',
+    'http://127.0.0.1:9292',
+    'https://127.0.0.1:9292',
+  ]);
+
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET,OPTIONS,POST',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
+    'Access-Control-Allow-Credentials': 'true',
+    'Cache-Control': 'no-store',
   };
+
+  if (origin && ALLOWED_ORIGINS.has(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin; // echo back exact origin
+    headers['Vary'] = 'Origin';
+  } else {
+    // default to production site only
+    headers['Access-Control-Allow-Origin'] = 'https://barrelnbond.com';
+  }
+
+  return headers;
 }
