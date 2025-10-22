@@ -6,10 +6,10 @@ async function main(arg, { qs, isV2, method, shop }) {
   try {
     console.log("qs:", qs);
 
-    const bottle = qs.bottle;
+    const bottleName = qs.bottleName;
     const designSide = qs.designSide;
     
-    console.log("bottle:", bottle);
+    console.log("bottleName:", bottleName);
     console.log("designSide:", designSide);
 
     const labelDimensions = {
@@ -35,8 +35,8 @@ async function main(arg, { qs, isV2, method, shop }) {
       }
     };
 
-    const width = labelDimensions[bottle]?.[designSide]?.width || null;
-    const height = labelDimensions[bottle]?.[designSide]?.height || null;
+    const width = labelDimensions[bottleName]?.[designSide]?.width || null;
+    const height = labelDimensions[bottleName]?.[designSide]?.height || null;
     let prompt = qs.prompt || null;
 
     if(width && height && prompt) {
