@@ -97,7 +97,7 @@ async function main(arg, { qs, isV2, method, shop }) {
 }
 
 export default withShopifyProxy(main, {
-  methods: ["GET"],
+  methods: ["POST"],
   allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
   requireShop: true,
 });
