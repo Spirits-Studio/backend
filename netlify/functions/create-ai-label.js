@@ -64,10 +64,14 @@ function normaliseSide(side = "") {
 
 async function main(arg, { qs, method }) {
   try {
+    console.log("arg", arg)
+    console.log("qs", qs)
+    console.log("method", method)
+    
     // Read incoming payload from Shopify App Proxy (qs) and JSON body
     const body = safeParseJSON(arg?.body);
 
-    // Accept both JSON keys and qs aliases (bottle|bottleName, side|designSide)
+    // Accept both JSON keys and qs aliases
     const alcoholName = body.alcoholName ?? qs.alcoholName ?? "";
     const rawBottle = body.bottleName ?? qs.bottleName ?? "";
     const rawSide   = body.designSide ?? qs.designSide ?? "";
