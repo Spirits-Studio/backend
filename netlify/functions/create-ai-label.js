@@ -18,7 +18,50 @@ function safeParseJSON(input) {
   try { return JSON.parse(input); } catch { return {}; }
 }
 
-// add just below safeParseJSON
+// --- Helper: read Request body supporting JSON, form-data, and urlencoded
+async function readBody(req) {
+  try {
+    const ct = req?.headers?.get?.('content-type') || '';
+
+    // JSON
+    if (ct.includes('application/json')) {
+      const text = await req.text();
+      return safeParseJSON(text);
+    }
+
+    // Form submissions (Site/Browser -> Netlify function)
+    if (ct.includes('multipart/form-data') || ct.includes('application/x-www-form-urlencoded')) {
+      const fd = await req.formData();
+      const obj = {};
+      for (const [key, value] of fd.entries()) {
+        if (typeof value === 'string') {
+          obj[key] = value;
+        } else if (value && typeof value.arrayBuffer === 'function') {
+          // File/Blob – convert to data URL if it's the logo
+          const mime = value.type || 'application/octet-stream';
+          const ab = await value.arrayBuffer();
+          const b64 = Buffer.from(ab).toString('base64');
+          if (key === 'logo') {
+            obj.logoDataUrl = `data:${mime};base64,${b64}`;
+            obj.logoName = value.name || 'logo';
+          } else {
+            // keep as generic attachment if needed later
+            obj[key] = { name: value.name || 'file', mime, size: ab.byteLength, base64: b64 };
+          }
+        }
+      }
+      return obj;
+    }
+
+    // Fallback: try text->JSON
+    const text = await req.text();
+    return safeParseJSON(text);
+  } catch (e) {
+    console.error('readBody error:', e?.message || e);
+    return {};
+  }
+}
+
 function pickDataUrl(obj, keys = []) {
   for (const k of keys) {
     const v = obj?.[k];
@@ -69,7 +112,8 @@ async function main(arg, { qs, method }) {
     console.log("method", method)
     
     // Read incoming payload from Shopify App Proxy (qs) and JSON body
-    const body = safeParseJSON(arg?.body);
+    const body = await readBody(arg);
+    console.log('parsed body keys:', Object.keys(body || {}));
 
     // Accept both JSON keys and qs aliases
     const alcoholName = body.alcoholName ?? qs.alcoholName ?? "";
