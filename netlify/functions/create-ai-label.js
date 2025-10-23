@@ -18,6 +18,31 @@ function safeParseJSON(input) {
   try { return JSON.parse(input); } catch { return {}; }
 }
 
+// add just below safeParseJSON
+function pickDataUrl(obj, keys = []) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (typeof v === 'string' && v.startsWith('data:')) return v;
+  }
+  return '';
+}
+
+function normalizeHex(hex = '') {
+  const s = String(hex).trim();
+  if (!s) return '';
+  const m = s.match(/^#?[0-9a-fA-F]{6}$/);
+  return m ? (s.startsWith('#') ? s : `#${s}`) : '';
+}
+
+function dataUrlToInlineData(dataUrl) {
+  try {
+    const [, meta, b64] = dataUrl.match(/^data:(.*?);base64,(.*)$/) || [];
+    if (!b64) return null;
+    const mime = meta && meta.includes('/') ? meta : 'image/png';
+    return { mime, data: b64 };
+  } catch { return null; }
+}
+
 // --- Label dimension map (mm) ---
 const labelDimensions = {
   Polo:   { front: { width: 110, height: 65 },  back: { width: 110, height: 65 } },
@@ -43,21 +68,39 @@ async function main(arg, { qs, method }) {
     const body = safeParseJSON(arg?.body);
 
     // Accept both JSON keys and qs aliases (bottle|bottleName, side|designSide)
-    const rawBottle = body.bottleName ?? body.bottle ?? qs.bottleName ?? qs.bottle ?? "";
-    const rawSide   = body.designSide ?? body.side ?? qs.designSide ?? qs.side ?? "";
-    const promptIn  = body.prompt ?? qs.prompt ?? "";
+    const alcoholName = body.alcoholName ?? qs.alcoholName ?? "";
+    const rawBottle = body.bottleName ?? qs.bottleName ?? "";
+    const rawSide   = body.designSide ?? qs.designSide ?? "";
     const sessionId = body.sessionId ?? qs.sessionId ?? "";
+    const titleIn      = body.title ?? qs.title ?? '';
+    const subtitleIn   = body.subtitle ?? qs.subtitle ?? '';
+    const promptIn  = body.prompt ?? qs.prompt ?? "";
+    const primaryIn    = body.primaryColor ?? qs.primaryColor ?? '';
+    const secondaryIn  = body.secondaryColor ?? qs.secondaryColor ?? '';
+
+    const primaryHex   = normalizeHex(primaryIn);
+    const secondaryHex = normalizeHex(secondaryIn);
+
+    // Optional logo as data URL (if client sends it)
+    const logoDataUrl  = pickDataUrl(body, ['logoDataUrl', 'logo']) || pickDataUrl(qs, ['logoDataUrl']);
+    const logoInline   = logoDataUrl ? dataUrlToInlineData(logoDataUrl) : null;
 
     const bottleName = normaliseBottle(rawBottle);
     const designSide = normaliseSide(rawSide);
     const dims = labelDimensions[bottleName]?.[designSide] || null;
 
-    console.log("create-ai-label incoming:", {
+    console.log('create-ai-label incoming:', {
       method,
+      alcoholName,
       bottleName,
       designSide,
       hasPrompt: Boolean(promptIn),
-      sessionId: sessionId ? String(sessionId).slice(0, 6) + "…" : "",
+      hasTitle: Boolean(titleIn),
+      hasSubtitle: Boolean(subtitleIn),
+      primaryHex,
+      secondaryHex,
+      logoInline: Boolean(logoInline),
+      sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
     });
 
     if (!dims) {
@@ -73,12 +116,22 @@ async function main(arg, { qs, method }) {
     }
 
     // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
+    const promptLines = [];
+    const initialPromptLine = 'Design a creative and attractive label for a bottle of .';
+    if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
+    if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
+    if (primaryHex || secondaryHex) {
+      promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
+    }
+    if (promptIn)   promptLines.push(promptIn);
+
     const finalPrompt =
-      `${promptIn}\n\n` +
-      `Important production constraints:\n` +
+      `${promptLines.join('\n')}` +
+      `\n\nImportant production constraints:\n` +
       `- The design must fit a label area of ${dims.width}mm (width) × ${dims.height}mm (height).\n` +
+      `- Provide a clean, print-ready image without borders beyond the trim at 300dpi and in a CMYK print format.` +
       `- Keep a 2mm trim (bleed) on all sides; keep key text/logos inside a safe margin.\n` +
-      `- Provide a clean, print-ready image without borders beyond the trim.`;
+      `- Return an image precisely the label size + trim: width = ${dims.width+2}mm, height = ${dims.height+2}mm.`;
 
     const apiKey = getGeminiKey();
     if (!apiKey) {
