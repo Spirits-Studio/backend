@@ -1,103 +1,146 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import * as fs from "node:fs";
+import { GoogleGenAI } from "@google/genai";
 
-async function main(arg, { qs, isV2, method, shop }) {
+// --- Helper: read API key from canonical env names (with your legacy fallback) ---
+function getGeminiKey() {
+  return (
+    process.env.GOOGLE_API_KEY ||
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_AI_STUDIO_KEY || // legacy fallback
+    ""
+  );
+}
+
+// --- Helper: safe JSON parse ---
+function safeParseJSON(input) {
+  if (!input) return {};
+  if (typeof input === "object") return input;
+  try { return JSON.parse(input); } catch { return {}; }
+}
+
+// --- Label dimension map (mm) ---
+const labelDimensions = {
+  Polo:   { front: { width: 110, height: 65 },  back: { width: 110, height: 65 } },
+  Outlaw: { front: { width: 55,  height: 95 },  back: { width: 55,  height: 95 } },
+  Antica: { front: { width: 110, height: 110 }, back: { width: 80,  height: 100 } },
+  Manila: { front: { width: 135, height: 50 },  back: { width: 115, height: 40 } },
+  Origin: { front: { width: 115, height: 45 },  back: { width: 100, height: 45 } },
+};
+
+// --- Normalise bottle & side casing to match keys above ---
+function normaliseBottle(name = "") {
+  if (!name) return "";
+  return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
+}
+function normaliseSide(side = "") {
+  const s = String(side || "").toLowerCase();
+  return s === "back" ? "back" : "front";
+}
+
+async function main(arg, { qs, method }) {
   try {
-    console.log("qs:", qs);
+    // Read incoming payload from Shopify App Proxy (qs) and JSON body
+    const body = safeParseJSON(arg?.body);
 
-    const bottleName = qs.bottleName;
-    const designSide = qs.designSide;
-    
-    console.log("bottleName:", bottleName);
-    console.log("designSide:", designSide);
+    // Accept both JSON keys and qs aliases (bottle|bottleName, side|designSide)
+    const rawBottle = body.bottleName ?? body.bottle ?? qs.bottleName ?? qs.bottle ?? "";
+    const rawSide   = body.designSide ?? body.side ?? qs.designSide ?? qs.side ?? "";
+    const promptIn  = body.prompt ?? qs.prompt ?? "";
+    const sessionId = body.sessionId ?? qs.sessionId ?? "";
 
-    const labelDimensions = {
-      Polo: {
-        front: { width: 110, height: 65 },
-        back: { width: 110, height: 65 }
-      },
-      Outlaw: {
-        front: { width: 55, height: 95 },
-        back: { width: 55, height: 95 }
-      },
-      Antica: {
-        front: { width: 110, height: 110 },
-        back: { width: 80, height: 100 }
-      },
-      Manila: {
-        front: { width: 135, height: 50 },
-        back: { width: 115, height: 40 }
-      },
-      Origin: {
-        front: { width: 115, height: 45 },
-        back: { width: 100, height: 45 }
-      }
-    };
+    const bottleName = normaliseBottle(rawBottle);
+    const designSide = normaliseSide(rawSide);
+    const dims = labelDimensions[bottleName]?.[designSide] || null;
 
-    const width = labelDimensions[bottleName]?.[designSide]?.width || null;
-    const height = labelDimensions[bottleName]?.[designSide]?.height || null;
-    let prompt = qs.prompt || null;
+    console.log("create-ai-label incoming:", {
+      method,
+      bottleName,
+      designSide,
+      hasPrompt: Boolean(promptIn),
+      sessionId: sessionId ? String(sessionId).slice(0, 6) + "…" : "",
+    });
 
-    if(width && height && prompt) {
-      prompt += ` The output of the label dimensions are ${width}mm width and ${height}mm height, excluding a 2mm trim on all sides.`;
-      if (!process.env.GOOGLE_API_KEY) {
-        throw new Error("GOOGLE_API_KEY env var is missing");
-      }
-
-      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-image" });
-
-      // The generative-ai SDK expects a string or a list of parts for `generateContent`.
-      const result = await model.generateContent(prompt);
-      const resp = await result.response;
-
-      console.log("AI Response metadata:", {
-        promptFeedback: resp.promptFeedback,
-        candidates: Array.isArray(resp.candidates) ? resp.candidates.length : 0,
-      });
-
-      const parts = (resp.candidates?.[0]?.content?.parts) || [];
-      for (const part of parts) {
-        if (part.text) {
-          console.log(part.text);
-        } else if (part.inlineData?.data) {
-          const imageData = part.inlineData.data; // base64
-          const buffer = Buffer.from(imageData, "base64");
-          fs.writeFileSync("gemini-native-image.png", buffer);
-          console.log("Image saved as gemini-native-image.png");
-        }
-      }
-
-      return {
-        statusCode: 200,
-        body: JSON.stringify({ message: "AI image generated successfully" }),
-      };
-
-    } else {
-      if(!width || !height) {
-        console.error("Label Dimensions not identified: width:", width, " height:", height);
-      }
-
-      if(!prompt) {
-        console.error("Prompt not provided");
-      }
-
+    if (!dims) {
+      console.error("Label Dimensions not identified:", { bottleName, designSide });
       return {
         statusCode: 400,
-        body: JSON.stringify({ message: "Label Dimensions and/or prompt not identified" }),
+        body: JSON.stringify({ message: "Label Dimensions not identified", bottleName, designSide }),
       };
-      
-
     }
+    if (!promptIn) {
+      console.error("Prompt not provided");
+      return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
+    }
+
+    // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
+    const finalPrompt =
+      `${promptIn}\n\n` +
+      `Important production constraints:\n` +
+      `- The design must fit a label area of ${dims.width}mm (width) × ${dims.height}mm (height).\n` +
+      `- Keep a 2mm trim (bleed) on all sides; keep key text/logos inside a safe margin.\n` +
+      `- Provide a clean, print-ready image without borders beyond the trim.`;
+
+    const apiKey = getGeminiKey();
+    if (!apiKey) {
+      console.error("Gemini API key is missing (set GOOGLE_API_KEY or GEMINI_API_KEY).");
+      return { statusCode: 500, body: "Gemini API key is missing" };
+    }
+
+    // Use the new @google/genai client per official docs
+    const ai = new GoogleGenAI({ apiKey });
+    const modelId = "gemini-2.5-flash-image";
+
+    let response;
+    try {
+      response = await ai.models.generateContent({
+        model: modelId,
+        // The SDK accepts a string or a structured "contents" array; a plain string is fine here.
+        contents: finalPrompt,
+      });
+    } catch (err) {
+      console.error("Gemini generateContent error:", err?.message || err);
+      // Forward error text if present (commonly contains API_KEY_INVALID)
+      return {
+        statusCode: 502,
+        body: JSON.stringify({ message: "Gemini API error", error: String(err?.message || err) }),
+      };
+    }
+
+    const parts = response?.candidates?.[0]?.content?.parts || [];
+    const images = [];
+    let modelMessage = "";
+
+    for (const part of parts) {
+      if (part.text) {
+        modelMessage += (modelMessage ? "\n" : "") + part.text;
+      } else if (part.inlineData?.data) {
+        const mime = part.inlineData?.mime || "image/png";
+        const dataUrl = `data:${mime};base64,${part.inlineData.data}`;
+        images.push(dataUrl);
+      }
+    }
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        message: "AI image generated successfully",
+        model: modelId,
+        bottleName,
+        designSide,
+        width_mm: dims.width,
+        height_mm: dims.height,
+        images,           // data URLs (base64) if any
+        modelMessage,     // optional text returned by model
+      }),
+    };
   } catch (err) {
-    console.error(err);
-    return { statusCode: 500, body: err.message };
+    console.error("create-ai-label unhandled error:", err);
+    return { statusCode: 500, body: String(err?.message || err) };
   }
 }
 
 export default withShopifyProxy(main, {
-  methods: ["POST"],
+  methods: ["POST"],                   // Expect POST from your frontend
   allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
   requireShop: true,
 });
