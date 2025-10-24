@@ -203,7 +203,7 @@ async function main(arg, { qs, method }) {
       if(responseModalitiesValue === 'image_only') {
         return ['Image'];
 
-      } else if(responseModalitiesValue === 'text_only' || hasTitle) {
+      } else if(responseModalitiesValue === 'text_only' || Boolean(titleIn)) {
         return ['Text', 'Image'];
 
       } else {
