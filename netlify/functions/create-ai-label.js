@@ -105,6 +105,39 @@ function normaliseSide(side = "") {
   return s === "back" ? "back" : "front";
 }
 
+// Find closes aspect ratio from dimensions map (if needed)
+function getClosestAspectRatio(width, height) {
+  const ratios = [
+    "1:1",
+    "2:3",
+    "3:2",
+    "3:4",
+    "4:3",
+    "4:5",
+    "5:4",
+    "9:16",
+    "16:9",
+    "21:9"
+  ];
+
+  const target = width / height;
+
+  let closest = ratios[0];
+  let smallestDiff = Infinity;
+
+  for (const ratio of ratios) {
+    const [w, h] = ratio.split(":").map(Number);
+    const r = w / h;
+    const diff = Math.abs(r - target);
+    if (diff < smallestDiff) {
+      smallestDiff = diff;
+      closest = ratio;
+    }
+  }
+
+  return closest;
+}
+
 async function main(arg, { qs, method }) {
   try {    
     // Read incoming payload from Shopify App Proxy (qs) and JSON body
@@ -115,18 +148,19 @@ async function main(arg, { qs, method }) {
     const rawBottle = body.bottleName ?? qs.bottleName ?? "";
     const rawSide   = body.designSide ?? qs.designSide ?? "";
     const sessionId = body.sessionId ?? qs.sessionId ?? "";
-    const titleIn      = body.title ?? qs.title ?? '';
-    const subtitleIn   = body.subtitle ?? qs.subtitle ?? '';
-    const promptIn  = body.prompt ?? qs.prompt ?? "";
-    const primaryIn    = body.primaryColor ?? qs.primaryColor ?? '';
-    const secondaryIn  = body.secondaryColor ?? qs.secondaryColor ?? '';
+    const responseModalities = body.responseModalities ?? qs.responseModalities ?? '';
+    const titleIn = body.title ?? qs.title ?? '';
+    const subtitleIn = body.subtitle ?? qs.subtitle ?? '';
+    const promptIn = body.prompt ?? qs.prompt ?? "";
+    const primaryIn = body.primaryColor ?? qs.primaryColor ?? '';
+    const secondaryIn = body.secondaryColor ?? qs.secondaryColor ?? '';
 
-    const primaryHex   = normalizeHex(primaryIn);
+    const primaryHex = normalizeHex(primaryIn);
     const secondaryHex = normalizeHex(secondaryIn);
 
     // Optional logo as data URL (if client sends it)
-    const logoDataUrl  = pickDataUrl(body, ['logoDataUrl', 'logo']) || pickDataUrl(qs, ['logoDataUrl']);
-    const logoInline   = logoDataUrl ? dataUrlToInlineData(logoDataUrl) : null;
+    const logoDataUrl = pickDataUrl(body, ['logoDataUrl', 'logo']) || pickDataUrl(qs, ['logoDataUrl']);
+    const logoInline = logoDataUrl ? dataUrlToInlineData(logoDataUrl) : null;
 
     const bottleName = normaliseBottle(rawBottle);
     const designSide = normaliseSide(rawSide);
@@ -137,6 +171,7 @@ async function main(arg, { qs, method }) {
       alcoholName,
       bottleName,
       designSide,
+      responseModalities,
       hasPrompt: Boolean(promptIn),
       hasTitle: Boolean(titleIn),
       hasSubtitle: Boolean(subtitleIn),
@@ -163,15 +198,14 @@ async function main(arg, { qs, method }) {
     const promptLines = [];
     const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}.`;
     promptLines.push(initialPromptLine);
+    if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
+    if (logoInline) {
+      promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
+    }
     if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
     if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
     if (primaryHex || secondaryHex) {
       promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
-    }
-    if (promptIn)   promptLines.push(promptIn);
-    // Logo inclusion instruction
-    if (logoInline) {
-      promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
     }
 
     const finalPrompt =
@@ -199,6 +233,11 @@ async function main(arg, { qs, method }) {
         model: modelId,
         // The SDK accepts a string or a structured "contents" array; a plain string is fine here.
         contents: finalPrompt,
+        config: {
+          imageConfig: {
+            aspectRatio: getClosestAspectRatio(dims.width, dims.height),
+          },
+        }
       });
     } catch (err) {
       console.error("Gemini generateContent error:", err?.message || err);
