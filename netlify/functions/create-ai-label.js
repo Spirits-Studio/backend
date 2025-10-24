@@ -383,6 +383,12 @@ async function main(arg, { qs, method }) {
     const primaryIn = body.primaryColor ?? qs.primaryColor ?? '';
     const secondaryIn = body.secondaryColor ?? qs.secondaryColor ?? '';
 
+    // Optional inspiration/front image for back-side generation
+    const frontImageDataUrl =
+      pickDataUrl(body, ['frontImage', 'inspirationDataUrl']) ||
+      pickDataUrl(qs, ['frontImage', 'inspirationDataUrl']);
+    const inspirationInline = frontImageDataUrl ? dataUrlToInlineData(frontImageDataUrl) : null;
+
     const primaryHex = normalizeHex(primaryIn);
     const secondaryHex = normalizeHex(secondaryIn);
 
@@ -414,6 +420,8 @@ async function main(arg, { qs, method }) {
       logoDataUrl,
       logoInline: Boolean(logoInline),
       sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
+      hasInspiration: Boolean(inspirationInline),
+      usingTemplate: Boolean(templateUrl)
     });
 
     if (!dims) {
@@ -428,7 +436,10 @@ async function main(arg, { qs, method }) {
       return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
     }
 
-    const finalPrompt = buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, null)
+    const frontHint = inspirationInline
+      ? 'Match the typography, palette, and general layout of the provided front label inspiration.'
+      : null;
+    const finalPrompt = buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, frontHint);
     
     // console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
@@ -457,7 +468,11 @@ async function main(arg, { qs, method }) {
         parts.push({ text: "This is the logo to include unchanged in the final design." });
         parts.push({ inlineData: logoInline });
       }
-      parts.push({ text: finalPrompt });
+      if (designSide === 'back' && inspirationInline) {
+        parts.push({ text: "This is the front label to use as design inspiration; match its style and complement it." });
+        parts.push({ inlineData: inspirationInline });
+      }
+      parts.push({ text: `${finalPrompt}\nUse the template as the base canvas. Preserve its pixel dimensions. Do not add white borders.` });
       genContents = [{ role: 'user', parts }];
 
     } catch (e) {
@@ -493,6 +508,7 @@ async function main(arg, { qs, method }) {
         try { addDebugImage(Buffer.from(part.inlineData.data, 'base64'), `ai-output-${images.length}`); } catch (_) {}
       }
     }
+    const firstImage = images[0] || '';
 
     // // Old retry/processing path (kept for reference):
     // // - Trim white borders
@@ -513,6 +529,7 @@ async function main(arg, { qs, method }) {
         height_mm: dims.height,
         images,
         modelMessage,
+        ...(designSide === 'front' ? { frontImage: firstImage } : {}),
         ...(debugOn ? { debugImages } : {}),
       }),
     };
