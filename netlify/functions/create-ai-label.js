@@ -193,6 +193,11 @@ async function main(arg, { qs, method }) {
       console.error("Prompt not provided");
       return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
     }
+    
+    if (!responseModalities) {
+      console.error("Response Modalities not provided");
+      return { statusCode: 400, body: JSON.stringify({ message: "Response Modalities not provided" }) };
+    }
 
     // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
     const promptLines = [];
@@ -234,6 +239,7 @@ async function main(arg, { qs, method }) {
         // The SDK accepts a string or a structured "contents" array; a plain string is fine here.
         contents: finalPrompt,
         config: {
+          responseModalities,
           imageConfig: {
             aspectRatio: getClosestAspectRatio(dims.width, dims.height),
           },
@@ -271,8 +277,8 @@ async function main(arg, { qs, method }) {
         designSide,
         width_mm: dims.width,
         height_mm: dims.height,
-        images,           // data URLs (base64) if any
-        modelMessage,     // optional text returned by model
+        images,
+        modelMessage,
       }),
     };
   } catch (err) {
