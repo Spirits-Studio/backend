@@ -1,5 +1,6 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { GoogleGenAI } from "@google/genai";
+import sharp from "sharp";
 
 // --- Helper: read API key from canonical env names (with your legacy fallback) ---
 function getGeminiKey() {
@@ -84,6 +85,30 @@ function dataUrlToInlineData(dataUrl) {
     const mime = meta && meta.includes('/') ? meta : 'image/png';
     return { mime, data: b64 };
   } catch { return null; }
+}
+
+async function trimWhiteBorder(input, threshold = 12) {
+  // Flatten transparency onto white so trim works properly
+  const flattened = await sharp(input)
+    .flatten({ background: { r: 255, g: 255, b: 255 } })
+    .toBuffer();
+
+  const originalMeta = await sharp(flattened).metadata();
+
+  // Trim any uniform border around the edges
+  const trimmed = sharp(flattened).trim(threshold);
+  const outputBuffer = await trimmed.toBuffer();
+  const croppedMeta = await sharp(outputBuffer).metadata();
+
+  return {
+    buffer: outputBuffer,
+    original: { width: originalMeta.width, height: originalMeta.height },
+    cropped: { width: croppedMeta.width, height: croppedMeta.height },
+    removed: {
+      width: originalMeta.width - croppedMeta.width,
+      height: originalMeta.height - croppedMeta.height
+    }
+  };
 }
 
 // --- Label dimension map (mm) ---
@@ -257,6 +282,7 @@ async function main(arg, { qs, method }) {
           // },
         // }
       });
+      console.log("response", response);
     } catch (err) {
       console.error("Gemini generateContent error:", err?.message || err);
       // Forward error text if present (commonly contains API_KEY_INVALID)
