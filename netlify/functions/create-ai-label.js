@@ -280,7 +280,7 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
     promptLines.push(initialPromptLine)
     frontLabel ? promptLines.push(frontLabel) : null;
   } else {
-    const initialPromptLine = `Using the provided template, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}. Fill the template completely, leave no white space, and do not add a border.`;
+    const initialPromptLine = `Using the provided template, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. Fill the template completely, leave no white space, and do not add a border.`;
     promptLines.push(initialPromptLine)
   }
   if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
