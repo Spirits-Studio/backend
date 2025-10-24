@@ -87,7 +87,7 @@ function dataUrlToInlineData(dataUrl) {
   } catch { return null; }
 }
 
-async function trimWhiteBorder(input, threshold = 12) {
+async function trimWhiteBorder(input, opts) {
   // Flatten transparency onto white so trim works properly
   const flattened = await sharp(input)
     .flatten({ background: { r: 255, g: 255, b: 255 } })
@@ -96,7 +96,7 @@ async function trimWhiteBorder(input, threshold = 12) {
   const originalMeta = await sharp(flattened).metadata();
 
   // Trim any uniform border around the edges
-  const trimmed = sharp(flattened).trim(threshold);
+  const trimmed = sharp(flattened).trim(opts.threshold);
   const outputBuffer = await trimmed.toBuffer();
   const croppedMeta = await sharp(outputBuffer).metadata();
 
@@ -305,7 +305,7 @@ async function main(arg, { qs, method }) {
       console.log('checkAcceptableDimensions targetHeightMm:', targetHeightMm);
       console.log('checkAcceptableDimensions opts:', opts);
 
-      const { tolerance = 0.03, trimThreshold = 15 } = opts; // ~3% aspect-ratio tolerance
+      const { tolerance = 0.03, threshold = 5 } = opts;
 
       try {
         // Convert data URL -> Buffer for Sharp
@@ -313,7 +313,7 @@ async function main(arg, { qs, method }) {
         const inputBuffer = Buffer.from(base64, 'base64');
 
         // Trim white border and get new dimensions
-        const { buffer: croppedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, trimThreshold);
+        const { buffer: croppedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, opts);
           console.log('checkAcceptableDimensions croppedBuffer.length:', croppedBuffer.length);
           console.log('checkAcceptableDimensions original:', original);
           console.log('checkAcceptableDimensions cropped:', cropped);
