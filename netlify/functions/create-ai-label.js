@@ -179,7 +179,7 @@ async function main(arg, { qs, method }) {
       `\n\nImportant production constraints:\n` +
       `- The design must fit a label area of ${dims.width+2}mm (width) × ${dims.height+2}mm (height).\n` +
       `- The design have square edges.` +
-      `- Provide a clean, print-ready image without visible borders beyond the trim at 300dpi and in a CMYK print format.` +
+      `- Provide a clean, print-ready image without visible borders beyond the trim at 300dpi and in a CMYK print format.`
 
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
 
