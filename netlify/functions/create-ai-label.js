@@ -171,6 +171,8 @@ async function main(arg, { qs, method }) {
       alcoholName,
       bottleName,
       designSide,
+      width: dims.width,
+      height: dims.height,
       responseModalitiesValue,
       hasPrompt: Boolean(promptIn),
       hasTitle: Boolean(titleIn),
@@ -232,7 +234,9 @@ async function main(arg, { qs, method }) {
       `- The design have square edges.` +
       `- Provide a clean, print-ready image without visible borders beyond the trim at 300dpi and in a CMYK print format.`
 
-    console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
+      console.log("responseModalities", getResponseModalities(responseModalitiesValue))
+      console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
+      console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
 
     const apiKey = getGeminiKey();
     if (!apiKey) {
