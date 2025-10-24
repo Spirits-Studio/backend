@@ -106,14 +106,9 @@ function normaliseSide(side = "") {
 }
 
 async function main(arg, { qs, method }) {
-  try {
-    console.log("arg", arg)
-    console.log("qs", qs)
-    console.log("method", method)
-    
+  try {    
     // Read incoming payload from Shopify App Proxy (qs) and JSON body
     const body = await readBody(arg);
-    console.log('parsed body keys:', Object.keys(body || {}));
 
     // Accept both JSON keys and qs aliases
     const alcoholName = body.alcoholName ?? qs.alcoholName ?? "";
@@ -176,17 +171,15 @@ async function main(arg, { qs, method }) {
     if (promptIn)   promptLines.push(promptIn);
     // Logo inclusion instruction
     if (logoInline) {
-      promptLines.push(`Incorporate the provided logo at the same dimensions into the label design as a prominent feature.`);
+      promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
     }
 
     const finalPrompt =
       `${promptLines.join('\n')}` +
       `\n\nImportant production constraints:\n` +
-      `- The design must fit a label area of ${dims.width}mm (width) × ${dims.height}mm (height).\n` +
+      `- The design must fit a label area of ${dims.width+2}mm (width) × ${dims.height+2}mm (height).\n` +
       `- The design have square edges.` +
       `- Provide a clean, print-ready image without visible borders beyond the trim at 300dpi and in a CMYK print format.` +
-      `- Keep a 2mm trim (bleed) on all sides; keep key text/logos inside a safe margin.\n` +
-      `- Return an image precisely the label size + trim: width = ${dims.width+2}mm, height = ${dims.height+2}mm.`;
 
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
 
