@@ -87,7 +87,10 @@ function dataUrlToInlineData(dataUrl) {
   } catch { return null; }
 }
 
-async function trimWhiteBorder(input, opts) {
+async function trimWhiteBorder(input, opts = {}) {
+  // Support both number and object forms: trimWhiteBorder(buf, 15) or trimWhiteBorder(buf, { threshold: 15 })
+  const threshold = typeof opts === 'number' ? opts : (opts && typeof opts.threshold === 'number' ? opts.threshold : 12);
+
   // Flatten transparency onto white so trim works properly
   const flattened = await sharp(input)
     .flatten({ background: { r: 255, g: 255, b: 255 } })
@@ -95,8 +98,8 @@ async function trimWhiteBorder(input, opts) {
 
   const originalMeta = await sharp(flattened).metadata();
 
-  // Trim any uniform border around the edges
-  const trimmed = sharp(flattened).trim(opts.threshold);
+  // Sharp >=0.33 expects an object; passing `{ threshold }` works across versions
+  const trimmed = sharp(flattened).trim({ threshold });
   const outputBuffer = await trimmed.toBuffer();
   const croppedMeta = await sharp(outputBuffer).metadata();
 
