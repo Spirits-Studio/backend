@@ -3,7 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
 
 const debugImages = [];
-const debugOn = true; 
+let debugOn = false; // toggled per-request inside main()
 
 // --- Helper: read API key from canonical env names (with your legacy fallback) ---
 function getGeminiKey() {
@@ -318,12 +318,12 @@ async function checkAcceptableDimensions(attempt, dataUrl, targetWidthMm, target
   }
 }
 
-// Save debug image to a repo-visible folder
 function addDebugImage(buffer, label) {
   if (!debugOn) return;
+  // Keep as data URL for easy viewing in dev; no console logging here
   debugImages.push({
     label,
-    dataUrl: `data:image/png;base64,${buffer.toString('base64')}`
+    dataUrl: `data:image/png;base64,${buffer.toString('base64')}`,
   });
 }
 
@@ -331,6 +331,11 @@ async function main(arg, { qs, method }) {
   try {    
     // Read incoming payload from Shopify App Proxy (qs) and JSON body
     const body = await readBody(arg);
+    // Debug toggle: /function?debug=1 or body.debug=true
+    const qsDebug = qs?.debug;
+    debugOn = qsDebug === '1' || qsDebug === 'true' || body.debug === true;
+    // Reset collector per-invocation
+    debugImages.length = 0;
 
     // Accept both JSON keys and qs aliases
     const alcoholName = body.alcoholName ?? qs.alcoholName ?? "";
@@ -405,28 +410,6 @@ async function main(arg, { qs, method }) {
     const ai = new GoogleGenAI({ apiKey });
     const modelId = "gemini-2.5-flash-image";
 
-    let response;
-    try {
-      response = await ai.models.generateContent({
-        model: modelId,
-        contents: finalPrompt,
-        // config: {
-          // responseModalities: getResponseModalities(responseModalitiesValue, titleIn),
-          // imageConfig: {
-          //   aspectRatio: getClosestAspectRatio(dims.width, dims.height),
-          // },
-        // }
-      });
-
-    } catch (err) {
-      console.error("Gemini generateContent error:", err?.message || err);
-      // Forward error text if present (commonly contains API_KEY_INVALID)
-      return {
-        statusCode: 502,
-        body: JSON.stringify({ message: "Gemini API error", error: String(err?.message || err) }),
-      };
-    }
-
     // --- Retry loop for generation, trimming, aspect check, and label composing ---
     let images = [];
     let modelMessage = "";
@@ -468,7 +451,7 @@ async function main(arg, { qs, method }) {
 
         // Step 2-3: Trim + assess aspect ratio
         const result = await checkAcceptableDimensions(attempt, dataUrl, dims.width, dims.height, { tolerance: 0.25, trimThreshold: 15 });
-        console.log(`Attempt ${attempt}: checkAcceptableDimensions result:`, result)
+        console.log(`Attempt ${attempt}: acceptable=${!!result?.acceptable} ratioDiff=${(result?.ratioDiff*100).toFixed(1)}% target=${result?.targetRatio?.toFixed?.(3)} pixel=${result?.pixelRatio?.toFixed?.(3)}`);
         // saveDebugImage(result.trimmedBuffer, `attempt${attempt}-trimmed`);
         
         // Always store the trimmed image for reference/debug
@@ -507,7 +490,10 @@ async function main(arg, { qs, method }) {
     if (!madeAcceptable) {
       return {
         statusCode: 422,
-        body: JSON.stringify({ message: "Our AI model could not generate label with the correct dimensions. Please try again", debugImages })
+        body: JSON.stringify({
+          message: "Our AI model could not generate label with the correct dimensions. Please try again",
+          ...(debugOn ? { debugImages } : {}),
+        })
       };
     }
 
@@ -523,7 +509,7 @@ async function main(arg, { qs, method }) {
         images,
         modelMessage,
         finalLabelDataUrl,
-        debugImages
+        ...(debugOn ? { debugImages } : {}),
       }),
     };
   } catch (err) {
