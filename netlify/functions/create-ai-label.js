@@ -368,13 +368,7 @@ async function main(arg, { qs, method }) {
         body: JSON.stringify({ message: "Gemini API error", error: String(err?.message || err) }),
       };
     }
-
-    const parts = response?.candidates?.[0]?.content?.parts || [];
-    const images = [];
-    let modelMessage = "";
-
-    let acceptableDimensionsCount = 0
-    let acceptableDimensionsUrls = []
+    
 
     // --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
     async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
