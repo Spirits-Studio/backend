@@ -296,16 +296,73 @@ async function main(arg, { qs, method }) {
     const images = [];
     let modelMessage = "";
 
+    let acceptableDimensionsCount = 0
+    let acceptableDimensionsUrls = []
+
+    async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
+      const { tolerance = 0.03, trimThreshold = 15 } = opts; // ~3% aspect-ratio tolerance
+      try {
+        // Convert data URL -> Buffer for Sharp
+        const base64 = dataUrl.split(',')[1];
+        const inputBuffer = Buffer.from(base64, 'base64');
+
+        // Trim white border and get new dimensions
+        const { buffer: croppedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, trimThreshold);
+
+        // Build a data URL for the cropped image to keep flow simple
+        const croppedDataUrl = `data:image/png;base64,${croppedBuffer.toString('base64')}`;
+
+        // Compare aspect ratios (we only have mm targets, so compare ratios)
+        const targetRatio = targetWidthMm / targetHeightMm;
+        const pixelRatio = (cropped.width || 1) / (cropped.height || 1);
+
+        // Relative difference
+        const ratioDiff = Math.abs(pixelRatio - targetRatio) / targetRatio;
+        const acceptable = ratioDiff <= tolerance;
+
+        return {
+          acceptable,
+          ratioDiff,
+          targetRatio,
+          pixelRatio,
+          croppedDataUrl,
+          original,
+          cropped,
+          removed,
+        };
+      } catch (e) {
+        console.error('checkAcceptableDimensions error:', e?.message || e);
+        return { acceptable: false, error: String(e?.message || e) };
+      }
+    }
+
+
+                
+
     for (const part of parts) {
       if (part.text) {
         modelMessage += (modelMessage ? "\n" : "") + part.text;
       } else if (part.inlineData?.data) {
         const mime = part.inlineData?.mime || "image/png";
         const dataUrl = `data:${mime};base64,${part.inlineData.data}`;
-        images.push(dataUrl);
+
+        const result = await checkAcceptableDimensions(dataUrl, dims.width, dims.height);
+
+        // Always push the cropped version to avoid borders in downstream steps
+        const toPush = result?.croppedDataUrl || dataUrl;
+        images.push(toPush);
+
+        if (result?.acceptable) {
+          acceptableDimensionsCount += 1;
+          acceptableDimensionsUrls.push(toPush);
+        }
       }
     }
 
+    console.log('Cropped images acceptance:', {
+      acceptableDimensionsCount,
+      totalImages: images.length,
+    });
     return {
       statusCode: 200,
       body: JSON.stringify({
