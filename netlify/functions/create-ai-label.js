@@ -282,7 +282,7 @@ function getResponseModalities(responseModalitiesValue, titleIn) {
 }
 
 // --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
-async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
+async function checkAcceptableDimensions(attempt, dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
   const { tolerance = 0.25, trimThreshold = 15 } = opts; // 25% tolerance
   try {
     const base64 = dataUrl.split(',')[1];
@@ -467,7 +467,7 @@ async function main(arg, { qs, method }) {
         const dataUrl = `data:${mime};base64,${part.inlineData.data}`;
 
         // Step 2-3: Trim + assess aspect ratio
-        const result = await checkAcceptableDimensions(dataUrl, dims.width, dims.height, { tolerance: 0.25, trimThreshold: 15 });
+        const result = await checkAcceptableDimensions(attempt, dataUrl, dims.width, dims.height, { tolerance: 0.25, trimThreshold: 15 });
         console.log(`Attempt ${attempt}: checkAcceptableDimensions result:`, result)
         // saveDebugImage(result.trimmedBuffer, `attempt${attempt}-trimmed`);
         
