@@ -279,6 +279,7 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
 
   const promptLines = [];
   const regulatoryInfo = [];
+
   if(designSide === 'back') {
     const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}.`;
     regulatoryInfo.push("40% ABV", "70cl", "Please drink responsibly", "Distilled by Barrel n Bond @ 85 Nightingale Ln, London SW12 8NX", "The UK Chief Medical Officers recommend adults do not regularly drink more than 14 units per week")
@@ -292,17 +293,17 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
     promptLines.push(initialPromptLine)
     
     regulatoryInfo.push("40% ABV")
+    if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
+    if (logoInline) {
+      promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
+    }
+    if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
+    if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
+    if (primaryHex || secondaryHex) {
+      promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
+    }
   }
 
-  if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
-  if (logoInline) {
-    promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
-  }
-  if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
-  if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
-  if (primaryHex || secondaryHex) {
-    promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
-  }
 
   const finalPrompt =
     `${promptLines.join('\n')}` +
