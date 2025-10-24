@@ -148,7 +148,7 @@ async function main(arg, { qs, method }) {
     const rawBottle = body.bottleName ?? qs.bottleName ?? "";
     const rawSide   = body.designSide ?? qs.designSide ?? "";
     const sessionId = body.sessionId ?? qs.sessionId ?? "";
-    const responseModalities = body.responseModalities ?? qs.responseModalities ?? '';
+    const responseModalitiesValue = body.responseModalitiesValue ?? qs.responseModalitiesValue ?? '';
     const titleIn = body.title ?? qs.title ?? '';
     const subtitleIn = body.subtitle ?? qs.subtitle ?? '';
     const promptIn = body.prompt ?? qs.prompt ?? "";
@@ -171,7 +171,7 @@ async function main(arg, { qs, method }) {
       alcoholName,
       bottleName,
       designSide,
-      responseModalities,
+      responseModalitiesValue,
       hasPrompt: Boolean(promptIn),
       hasTitle: Boolean(titleIn),
       hasSubtitle: Boolean(subtitleIn),
@@ -194,9 +194,21 @@ async function main(arg, { qs, method }) {
       return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
     }
     
-    if (!responseModalities) {
+    if (!responseModalitiesValue) {
       console.error("Response Modalities not provided");
       return { statusCode: 400, body: JSON.stringify({ message: "Response Modalities not provided" }) };
+    }
+
+    function getResponseModalities(responseModalitiesValue) {
+      if(responseModalitiesValue === 'image_only') {
+        return ['Image'];
+
+      } else if(responseModalitiesValue === 'text_only' || hasTitle) {
+        return ['Text', 'Image'];
+
+      } else {
+        return ['Image'];
+      }
     }
 
     // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
@@ -239,7 +251,7 @@ async function main(arg, { qs, method }) {
         // The SDK accepts a string or a structured "contents" array; a plain string is fine here.
         contents: finalPrompt,
         config: {
-          responseModalities,
+          responseModalities: getResponseModalities(responseModalitiesValue),
           imageConfig: {
             aspectRatio: getClosestAspectRatio(dims.width, dims.height),
           },
