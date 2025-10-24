@@ -188,6 +188,8 @@ async function main(arg, { qs, method }) {
       `- Keep a 2mm trim (bleed) on all sides; keep key text/logos inside a safe margin.\n` +
       `- Return an image precisely the label size + trim: width = ${dims.width+2}mm, height = ${dims.height+2}mm.`;
 
+    console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
+
     const apiKey = getGeminiKey();
     if (!apiKey) {
       console.error("Gemini API key is missing (set GOOGLE_API_KEY or GEMINI_API_KEY).");
