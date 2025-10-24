@@ -264,13 +264,23 @@ function getClosestAspectRatio(width, height) {
 }
 
 function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, frontLabel) {
+  let orientation = ''
+  if(dims.width === dims.height) {
+    orientation = 'square ';
+  } else if(dims.width >= dims.height) {
+    orientation = 'landscape'
+  } else {
+    orientation = 'portrait'
+  }
+
   const promptLines = [];
   if(designSide === 'back') {
-    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive label for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. Fill the template completely, and leave no white space.`;
+    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive ${orientation} label design for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. The label design should fill the template completely, and leave no white space.`;
+
     promptLines.push(initialPromptLine)
     frontLabel ? promptLines.push(frontLabel) : null;
   } else {
-    const initialPromptLine = `Using the provided template, design a creative and attractive label for a bottle of ${alcoholName}. Fill the template completely, and leave no white space.`;
+    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive ${orientation} label design for a bottle of ${alcoholName}. Fill the template completely, and leave no white space.`;
     promptLines.push(initialPromptLine)
   }
   if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
@@ -422,10 +432,18 @@ async function main(arg, { qs, method }) {
     try {
       const templateInline = await fetchTemplateInlineData(templateUrl);
       const parts = [];
-      if (templateInline) parts.push({ inlineData: templateInline });
-      if (logoInline) parts.push({ inlineData: logoInline });
-      parts.push({ text: `${finalPrompt}\nUse the provided image as the base canvas. Preserve its pixel dimensions and design strictly within this template. Do not add white borders.` });
+      if (templateInline) {
+        parts.push({ text: "This is the template canvas to design upon." });
+        parts.push({ inlineData: templateInline });
+      }
+
+      if (logoInline) {
+        parts.push({ text: "This is the logo to include unchanged in the final design." });
+        parts.push({ inlineData: logoInline });
+      }
+      parts.push({ text: finalPrompt });
       genContents = [{ role: 'user', parts }];
+
     } catch (e) {
       console.warn('Template fetch failed; falling back to text-only prompt.', e?.message || e);
     }
