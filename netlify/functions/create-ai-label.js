@@ -268,7 +268,7 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
   }
 
 // Return Modalities array based on input value
-function getResponseModalities(responseModalitiesValue) {
+function getResponseModalities(responseModalitiesValue, titleIn) {
   if(responseModalitiesValue === 'image_only') {
     return ['Image'];
 
@@ -390,7 +390,7 @@ async function main(arg, { qs, method }) {
 
     const finalPrompt = buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, responseModalitiesValue)
     
-    console.log("responseModalities", getResponseModalities(responseModalitiesValue))
+    console.log("responseModalities", getResponseModalities(responseModalitiesValue, titleIn))
     console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
         
@@ -409,7 +409,7 @@ async function main(arg, { qs, method }) {
         model: modelId,
         contents: finalPrompt,
         // config: {
-          // responseModalities: getResponseModalities(responseModalitiesValue),
+          // responseModalities: getResponseModalities(responseModalitiesValue, titleIn),
           // imageConfig: {
           //   aspectRatio: getClosestAspectRatio(dims.width, dims.height),
           // },
