@@ -3,6 +3,7 @@ import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
 import fs from "fs";
 import path from "path";
+import os from "os";
 
 // --- Helper: read API key from canonical env names (with your legacy fallback) ---
 function getGeminiKey() {
@@ -315,10 +316,18 @@ async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm,
   }
 }
 
-// Save debug image to disk (for local testing)
+// Save debug image to disk (for local testing/cloud)
 function saveDebugImage(buffer, label) {
   if (process.env.NODE_ENV === "production") return; // skip in prod
-  const folder = "/tmp/ai-debug"; // works on Netlify and locally
+
+  const isNetlifyCloud = !!process.env.NETLIFY && !process.env.NETLIFY_DEV; // true on Netlify cloud
+
+  // Use OS temp on cloud (e.g., /tmp) and a repo-relative folder locally
+  const baseDir = isNetlifyCloud
+    ? os.tmpdir()                             // e.g., /tmp
+    : path.join(process.cwd(), ".ai-debug"); // visible in your repo during `netlify dev`
+
+  const folder = path.join(baseDir, "ai-debug");
   fs.mkdirSync(folder, { recursive: true });
   const file = path.join(folder, `${Date.now()}-${label}.png`);
   fs.writeFileSync(file, buffer);
