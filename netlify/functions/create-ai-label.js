@@ -111,6 +111,83 @@ async function trimWhiteBorder(input, opts) {
   };
 }
 
+// --- Unit & colour helpers ---
+function mmToPx(mm, dpi = 300) {
+  return Math.max(1, Math.round((mm / 25.4) * dpi));
+}
+
+function hexToRgb(hex) {
+  const h = hex.replace('#','');
+  return {
+    r: parseInt(h.substring(0,2),16),
+    g: parseInt(h.substring(2,4),16),
+    b: parseInt(h.substring(4,6),16)
+  };
+}
+
+// Detect dominant colour on the outermost ring of a trimmed image (first content colour)
+async function detectFirstContentColour(inputBuffer, nearWhite = 245, ring = 1) {
+  const im = sharp(inputBuffer).ensureAlpha();
+  const { data, info } = await im.raw().toBuffer({ resolveWithObject: true });
+  const W = info.width, H = info.height;
+  const isWhiteish = (r,g,b) => r>=nearWhite && g>=nearWhite && b>=nearWhite;
+  const clamp = (v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+  const sample=[];
+  for (let k=0;k<ring;k++){
+    const left=clamp(0+k,0,W-1);
+    const right=clamp(W-1-k,0,W-1);
+    const top=clamp(0+k,0,H-1);
+    const bottom=clamp(H-1-k,0,H-1);
+    for(let x=left;x<=right;x++){
+      for(const y of [top,bottom]){
+        const i=(y*W+x)*4; const r=data[i], g=data[i+1], b=data[i+2];
+        if(!isWhiteish(r,g,b)) sample.push([r,g,b]);
+      }
+    }
+    for(let y=top+1;y<bottom;y++){
+      for(const x of [left,right]){
+        const i=(y*W+x)*4; const r=data[i], g=data[i+1], b=data[i+2];
+        if(!isWhiteish(r,g,b)) sample.push([r,g,b]);
+      }
+    }
+  }
+  if (!sample.length) return '#FFFFFF';
+  const med = arr=>{const a=arr.slice().sort((a,b)=>a-b);const m=Math.floor(a.length/2);return a.length%2?a[m]:Math.round((a[m-1]+a[m])/2)};
+  const rs=sample.map(p=>p[0]), gs=sample.map(p=>p[1]), bs=sample.map(p=>p[2]);
+  const r=med(rs), g=med(gs), b=med(bs);
+  return '#' + [r,g,b].map(v=>v.toString(16).padStart(2,'0')).join('').toUpperCase();
+}
+
+// Compose final label with exact mm dimensions (converted to px via DPI) and center the cropped image
+async function composeLabel(croppedBuffer, widthMm, heightMm, bgHex, dpi = 300) {
+  const targetW = mmToPx(widthMm, dpi);
+  const targetH = mmToPx(heightMm, dpi);
+  const bg = hexToRgb(bgHex);
+
+  const meta = await sharp(croppedBuffer).metadata();
+  const cw = meta.width || 1;
+  const ch = meta.height || 1;
+
+  // Fit the cropped image entirely inside the target while preserving aspect
+  const scale = Math.min(targetW / cw, targetH / ch);
+  const rw = Math.max(1, Math.floor(cw * scale));
+  const rh = Math.max(1, Math.floor(ch * scale));
+
+  const resized = await sharp(croppedBuffer).resize(rw, rh, { fit: 'contain' }).toBuffer();
+
+  const left = Math.floor((targetW - rw) / 2);
+  const top  = Math.floor((targetH - rh) / 2);
+
+  const composite = await sharp({
+    create: { width: targetW, height: targetH, channels: 3, background: { r: bg.r, g: bg.g, b: bg.b } }
+  })
+  .composite([{ input: resized, left, top }])
+  .png()
+  .toBuffer();
+
+  return composite;
+}
+
 // --- Label dimension map (mm) ---
 const labelDimensions = {
   Polo:   { front: { width: 110, height: 65 },  back: { width: 110, height: 65 } },
@@ -299,48 +376,31 @@ async function main(arg, { qs, method }) {
     let acceptableDimensionsCount = 0
     let acceptableDimensionsUrls = []
 
+    // --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
     async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
-      console.log('checkAcceptableDimensions dataUrl:', dataUrl.slice(0, 30) + '…');
-      console.log('checkAcceptableDimensions targetWidthMm:', targetWidthMm);
-      console.log('checkAcceptableDimensions targetHeightMm:', targetHeightMm);
-      console.log('checkAcceptableDimensions opts:', opts);
-
-      const { tolerance = 0.03, threshold = 5 } = opts;
-
+      const { tolerance = 0.25, trimThreshold = 15 } = opts; // 25% tolerance
       try {
-        // Convert data URL -> Buffer for Sharp
         const base64 = dataUrl.split(',')[1];
         const inputBuffer = Buffer.from(base64, 'base64');
 
-        // Trim white border and get new dimensions
-        const { buffer: croppedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, opts);
-          console.log('checkAcceptableDimensions croppedBuffer.length:', croppedBuffer.length);
-          console.log('checkAcceptableDimensions original:', original);
-          console.log('checkAcceptableDimensions cropped:', cropped);
-          console.log('checkAcceptableDimensions removed:', removed);
+        // 1) Trim white borders first
+        const { buffer: trimmedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, { threshold: trimThreshold });
 
-
-        // Build a data URL for the cropped image to keep flow simple
-        const croppedDataUrl = `data:image/png;base64,${croppedBuffer.toString('base64')}`;
-
-        // Compare aspect ratios (we only have mm targets, so compare ratios)
+        // 2) Check aspect ratio tolerance
         const targetRatio = targetWidthMm / targetHeightMm;
         const pixelRatio = (cropped.width || 1) / (cropped.height || 1);
-        console.log('checkAcceptableDimensions targetRatio:', targetRatio);
-        console.log('checkAcceptableDimensions pixelRatio:', pixelRatio);
-
-        // Relative difference
         const ratioDiff = Math.abs(pixelRatio - targetRatio) / targetRatio;
-        console.log('checkAcceptableDimensions ratioDiff:', ratioDiff);
         const acceptable = ratioDiff <= tolerance;
-        console.log('checkAcceptableDimensions acceptable:', acceptable);
+
+        const trimmedDataUrl = `data:image/png;base64,${trimmedBuffer.toString('base64')}`;
 
         return {
           acceptable,
           ratioDiff,
           targetRatio,
           pixelRatio,
-          croppedDataUrl,
+          trimmedBuffer,
+          trimmedDataUrl,
           original,
           cropped,
           removed,
@@ -351,33 +411,86 @@ async function main(arg, { qs, method }) {
       }
     }
 
+    // --- Retry loop for generation, trimming, aspect check, and label composing ---
+    let images = [];
+    let modelMessage = "";
+    let finalLabelDataUrl = "";
 
-                
+    const maxAttempts = 3;
+    let attempt = 0;
+    let madeAcceptable = false;
 
-    for (const part of parts) {
-      if (part.text) {
-        modelMessage += (modelMessage ? "\n" : "") + part.text;
-      } else if (part.inlineData?.data) {
+    while (attempt < maxAttempts && !madeAcceptable) {
+      attempt++;
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: modelId,
+          contents: finalPrompt
+        });
+      } catch (err) {
+        console.error("Gemini generateContent error:", err?.message || err);
+        return { statusCode: 502, body: JSON.stringify({ message: "Gemini API error", error: String(err?.message || err) }) };
+      }
+
+      const parts = response?.candidates?.[0]?.content?.parts || [];
+      images.length = 0;
+      modelMessage = "";
+
+      let attemptAcceptable = false;
+      let attemptLabelBuffer = null;
+
+      for (const part of parts) {
+        if (part.text) {
+          modelMessage += (modelMessage ? "\n" : "") + part.text;
+          continue;
+        }
+        if (!part.inlineData?.data) continue;
+
         const mime = part.inlineData?.mime || "image/png";
         const dataUrl = `data:${mime};base64,${part.inlineData.data}`;
 
-        const result = await checkAcceptableDimensions(dataUrl, dims.width, dims.height);
+        // Step 2-3: Trim + assess aspect ratio
+        const result = await checkAcceptableDimensions(dataUrl, dims.width, dims.height, { tolerance: 0.25, trimThreshold: 15 });
 
-        // Always push the cropped version to avoid borders in downstream steps
-        const toPush = result?.croppedDataUrl || dataUrl;
-        images.push(toPush);
+        // Always store the trimmed image for reference/debug
+        const trimmedToPush = result?.trimmedDataUrl || dataUrl;
+        images.push(trimmedToPush);
 
-        if (result?.acceptable) {
-          acceptableDimensionsCount += 1;
-          acceptableDimensionsUrls.push(toPush);
+        if (!result?.acceptable) {
+          console.log(`Attempt ${attempt}: aspect ratio off by ${(result?.ratioDiff*100).toFixed(1)}% (>25%). Retrying…`);
+          attemptAcceptable = false;
+          continue;
         }
+
+        // Step 4b: acceptable → detect first content colour and compose final label
+        const edgeHex = await detectFirstContentColour(result.trimmedBuffer, 245, 2);
+
+        const labelBuffer = await composeLabel(
+          result.trimmedBuffer,
+          dims.width + 2,
+          dims.height + 2,
+          edgeHex,
+          300
+        );
+
+        finalLabelDataUrl = `data:image/png;base64,${labelBuffer.toString('base64')}`;
+        attemptLabelBuffer = labelBuffer;
+        attemptAcceptable = true;
+      }
+
+      if (attemptAcceptable) {
+        madeAcceptable = true;
       }
     }
 
-    console.log('Cropped images acceptance:', {
-      acceptableDimensionsCount,
-      totalImages: images.length,
-    });
+    if (!madeAcceptable) {
+      return {
+        statusCode: 422,
+        body: JSON.stringify({ message: "Our AI model could not generate label with the correct dimensions. Please try again" })
+      };
+    }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
@@ -389,6 +502,7 @@ async function main(arg, { qs, method }) {
         height_mm: dims.height,
         images,
         modelMessage,
+        finalLabelDataUrl,
       }),
     };
   } catch (err) {
