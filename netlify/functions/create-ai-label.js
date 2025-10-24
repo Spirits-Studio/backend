@@ -316,16 +316,16 @@ async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm,
 }
 
 // Save debug image to a repo-visible folder
-function saveDebugImage(buffer, label) {
-  if (process.env.NODE_ENV === "production") return; // skip in prod
+// function saveDebugImage(buffer, label) {
+//   if (process.env.NODE_ENV === "production") return; // skip in prod
 
-  const folder = path.join(process.cwd(), ".ai-debug");
-  fs.mkdirSync(folder, { recursive: true });
+//   const folder = path.join(process.cwd(), ".ai-debug");
+//   fs.mkdirSync(folder, { recursive: true });
 
-  const file = path.join(folder, `${Date.now()}-${label}.png`);
-  fs.writeFileSync(file, buffer);
-  console.log(`🧠 Saved debug image: ${file}`);
-}
+//   const file = path.join(folder, `${Date.now()}-${label}.png`);
+//   fs.writeFileSync(file, buffer);
+//   console.log(`🧠 Saved debug image: ${file}`);
+// }
 
 async function main(arg, { qs, method }) {
   try {    
@@ -469,7 +469,7 @@ async function main(arg, { qs, method }) {
         // Step 2-3: Trim + assess aspect ratio
         const result = await checkAcceptableDimensions(dataUrl, dims.width, dims.height, { tolerance: 0.25, trimThreshold: 15 });
         console.log(`Attempt ${attempt}: checkAcceptableDimensions result:`, result)
-        saveDebugImage(result.trimmedBuffer, `attempt${attempt}-trimmed`);
+        // saveDebugImage(result.trimmedBuffer, `attempt${attempt}-trimmed`);
         
         // Always store the trimmed image for reference/debug
         const trimmedToPush = result?.trimmedDataUrl || dataUrl;
