@@ -250,12 +250,12 @@ async function main(arg, { qs, method }) {
       response = await ai.models.generateContent({
         model: modelId,
         contents: finalPrompt,
-        config: {
-          responseModalities: getResponseModalities(responseModalitiesValue),
+        // config: {
+          // responseModalities: getResponseModalities(responseModalitiesValue),
           // imageConfig: {
           //   aspectRatio: getClosestAspectRatio(dims.width, dims.height),
           // },
-        }
+        // }
       });
     } catch (err) {
       console.error("Gemini generateContent error:", err?.message || err);
