@@ -282,7 +282,7 @@ async function main(arg, { qs, method }) {
           // },
         // }
       });
-      console.log("response", response);
+
     } catch (err) {
       console.error("Gemini generateContent error:", err?.message || err);
       // Forward error text if present (commonly contains API_KEY_INVALID)
