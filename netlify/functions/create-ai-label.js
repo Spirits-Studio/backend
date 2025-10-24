@@ -215,7 +215,7 @@ async function main(arg, { qs, method }) {
 
     // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
     const promptLines = [];
-    const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}.`;
+    const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}. Ensure the design covers the entire canvas area with no white space.`;
     promptLines.push(initialPromptLine);
     if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
     if (logoInline) {
