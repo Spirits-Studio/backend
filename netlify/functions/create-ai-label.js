@@ -1,8 +1,9 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
-import fs from "fs";
-import path from "path";
+
+const debugImages = [];
+const debugOn = true; 
 
 // --- Helper: read API key from canonical env names (with your legacy fallback) ---
 function getGeminiKey() {
@@ -286,9 +287,11 @@ async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm,
   try {
     const base64 = dataUrl.split(',')[1];
     const inputBuffer = Buffer.from(base64, 'base64');
+    addDebugImage(inputBuffer, `attempt${attempt}-raw`);
 
     // 1) Trim white borders first
     const { buffer: trimmedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, { threshold: trimThreshold });
+    addDebugImage(trimmedBuffer, `attempt${attempt}-trimmed`);
 
     // 2) Check aspect ratio tolerance
     const targetRatio = targetWidthMm / targetHeightMm;
@@ -316,16 +319,13 @@ async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm,
 }
 
 // Save debug image to a repo-visible folder
-// function saveDebugImage(buffer, label) {
-//   if (process.env.NODE_ENV === "production") return; // skip in prod
-
-//   const folder = path.join(process.cwd(), ".ai-debug");
-//   fs.mkdirSync(folder, { recursive: true });
-
-//   const file = path.join(folder, `${Date.now()}-${label}.png`);
-//   fs.writeFileSync(file, buffer);
-//   console.log(`🧠 Saved debug image: ${file}`);
-// }
+function addDebugImage(buffer, label) {
+  if (!debugOn) return;
+  debugImages.push({
+    label,
+    dataUrl: `data:image/png;base64,${buffer.toString('base64')}`
+  });
+}
 
 async function main(arg, { qs, method }) {
   try {    
@@ -492,6 +492,8 @@ async function main(arg, { qs, method }) {
           300
         );
 
+        addDebugImage(labelBuffer, `attempt${attempt}-final`)
+
         finalLabelDataUrl = `data:image/png;base64,${labelBuffer.toString('base64')}`;
         attemptLabelBuffer = labelBuffer;
         attemptAcceptable = true;
@@ -505,7 +507,7 @@ async function main(arg, { qs, method }) {
     if (!madeAcceptable) {
       return {
         statusCode: 422,
-        body: JSON.stringify({ message: "Our AI model could not generate label with the correct dimensions. Please try again" })
+        body: JSON.stringify({ message: "Our AI model could not generate label with the correct dimensions. Please try again", debugImages })
       };
     }
 
@@ -521,11 +523,12 @@ async function main(arg, { qs, method }) {
         images,
         modelMessage,
         finalLabelDataUrl,
+        debugImages
       }),
     };
   } catch (err) {
     console.error("create-ai-label unhandled error:", err);
-    return { statusCode: 500, body: String(err?.message || err) };
+    return { statusCode: 500, body: String(err?.message || err), debugImages };
   }
 }
 
