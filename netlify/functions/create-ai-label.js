@@ -1,6 +1,8 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
+import fs from "fs";
+import path from "path";
 
 // --- Helper: read API key from canonical env names (with your legacy fallback) ---
 function getGeminiKey() {
@@ -191,6 +193,7 @@ async function composeLabel(croppedBuffer, widthMm, heightMm, bgHex, dpi = 300) 
   return composite;
 }
 
+
 // --- Label dimension map (mm) ---
 const labelDimensions = {
   Polo:   { front: { width: 110, height: 65 },  back: { width: 110, height: 65 } },
@@ -210,7 +213,7 @@ function normaliseSide(side = "") {
   return s === "back" ? "back" : "front";
 }
 
-// Find closes aspect ratio from dimensions map (if needed)
+// Find closest aspect ratio from dimensions map (if needed)
 function getClosestAspectRatio(width, height) {
   const ratios = [
     "1:1",
@@ -241,6 +244,85 @@ function getClosestAspectRatio(width, height) {
   }
 
   return closest;
+}
+
+function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, responseModalitiesValue) {
+  const promptLines = [];
+  const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}. The canvas should be ${dims.width+2}mm (width) x ${dims.height+2}mm height. Ensure the design covers the entire canvas area with no white space`;
+  promptLines.push(initialPromptLine);
+  if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
+  if (logoInline) {
+    promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
+  }
+  if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
+  if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
+  if (primaryHex || secondaryHex) {
+    promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
+  }
+
+  const finalPrompt =
+    `${promptLines.join('\n')}` +
+    `- The design must have square corners.`
+    
+    return finalPrompt
+  }
+
+// Return Modalities array based on input value
+function getResponseModalities(responseModalitiesValue) {
+  if(responseModalitiesValue === 'image_only') {
+    return ['Image'];
+
+  } else if(responseModalitiesValue === 'text_only' || Boolean(titleIn)) {
+    return ['Text', 'Image'];
+
+  } else {
+    return ['Image'];
+  }
+}
+
+// --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
+async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
+  const { tolerance = 0.25, trimThreshold = 15 } = opts; // 25% tolerance
+  try {
+    const base64 = dataUrl.split(',')[1];
+    const inputBuffer = Buffer.from(base64, 'base64');
+
+    // 1) Trim white borders first
+    const { buffer: trimmedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, { threshold: trimThreshold });
+
+    // 2) Check aspect ratio tolerance
+    const targetRatio = targetWidthMm / targetHeightMm;
+    const pixelRatio = (cropped.width || 1) / (cropped.height || 1);
+    const ratioDiff = Math.abs(pixelRatio - targetRatio) / targetRatio;
+    const acceptable = ratioDiff <= tolerance;
+
+    const trimmedDataUrl = `data:image/png;base64,${trimmedBuffer.toString('base64')}`;
+
+    return {
+      acceptable,
+      ratioDiff,
+      targetRatio,
+      pixelRatio,
+      trimmedBuffer,
+      trimmedDataUrl,
+      original,
+      cropped,
+      removed,
+    };
+  } catch (e) {
+    console.error('checkAcceptableDimensions error:', e?.message || e);
+    return { acceptable: false, error: String(e?.message || e) };
+  }
+}
+
+// Save debug image to disk (for local testing)
+function saveDebugImage(buffer, label) {
+  if (process.env.NODE_ENV === "production") return; // skip in prod
+  const folder = "/tmp/ai-debug"; // works on Netlify and locally
+  fs.mkdirSync(folder, { recursive: true });
+  const file = path.join(folder, `${Date.now()}-${label}.png`);
+  fs.writeFileSync(file, buffer);
+  console.log(`🧠 Saved debug image: ${file}`);
 }
 
 async function main(arg, { qs, method }) {
@@ -306,47 +388,18 @@ async function main(arg, { qs, method }) {
       return { statusCode: 400, body: JSON.stringify({ message: "Response Modalities not provided" }) };
     }
 
-    function getResponseModalities(responseModalitiesValue) {
-      if(responseModalitiesValue === 'image_only') {
-        return ['Image'];
-
-      } else if(responseModalitiesValue === 'text_only' || Boolean(titleIn)) {
-        return ['Text', 'Image'];
-
-      } else {
-        return ['Image'];
-      }
-    }
-
-    // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
-    const promptLines = [];
-    const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}. The canvas should be ${dims.width+2}mm (width) x ${dims.height+2}mm height. Ensure the design covers the entire canvas area with no white space`;
-    promptLines.push(initialPromptLine);
-    if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
-    if (logoInline) {
-      promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
-    }
-    if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
-    if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
-    if (primaryHex || secondaryHex) {
-      promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
-    }
-
-    const finalPrompt =
-      `${promptLines.join('\n')}` +
-      `- The design must have square edges.`
-
-      console.log("responseModalities", getResponseModalities(responseModalitiesValue))
-      console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
-      console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
-
+    const finalPrompt = buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, responseModalitiesValue)
+    
+    console.log("responseModalities", getResponseModalities(responseModalitiesValue))
+    console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
+    console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
+        
     const apiKey = getGeminiKey();
     if (!apiKey) {
       console.error("Gemini API key is missing (set GOOGLE_API_KEY or GEMINI_API_KEY).");
       return { statusCode: 500, body: "Gemini API key is missing" };
     }
 
-    // Use the new @google/genai client per official docs
     const ai = new GoogleGenAI({ apiKey });
     const modelId = "gemini-2.5-flash-image";
 
@@ -370,42 +423,6 @@ async function main(arg, { qs, method }) {
         statusCode: 502,
         body: JSON.stringify({ message: "Gemini API error", error: String(err?.message || err) }),
       };
-    }
-    
-
-    // --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
-    async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
-      const { tolerance = 0.25, trimThreshold = 15 } = opts; // 25% tolerance
-      try {
-        const base64 = dataUrl.split(',')[1];
-        const inputBuffer = Buffer.from(base64, 'base64');
-
-        // 1) Trim white borders first
-        const { buffer: trimmedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, { threshold: trimThreshold });
-
-        // 2) Check aspect ratio tolerance
-        const targetRatio = targetWidthMm / targetHeightMm;
-        const pixelRatio = (cropped.width || 1) / (cropped.height || 1);
-        const ratioDiff = Math.abs(pixelRatio - targetRatio) / targetRatio;
-        const acceptable = ratioDiff <= tolerance;
-
-        const trimmedDataUrl = `data:image/png;base64,${trimmedBuffer.toString('base64')}`;
-
-        return {
-          acceptable,
-          ratioDiff,
-          targetRatio,
-          pixelRatio,
-          trimmedBuffer,
-          trimmedDataUrl,
-          original,
-          cropped,
-          removed,
-        };
-      } catch (e) {
-        console.error('checkAcceptableDimensions error:', e?.message || e);
-        return { acceptable: false, error: String(e?.message || e) };
-      }
     }
 
     // --- Retry loop for generation, trimming, aspect check, and label composing ---
@@ -449,7 +466,9 @@ async function main(arg, { qs, method }) {
 
         // Step 2-3: Trim + assess aspect ratio
         const result = await checkAcceptableDimensions(dataUrl, dims.width, dims.height, { tolerance: 0.25, trimThreshold: 15 });
-
+        console.log(`Attempt ${attempt}: checkAcceptableDimensions result:`, result)
+        saveDebugImage(result.trimmedBuffer, `attempt${attempt}-trimmed`);
+        
         // Always store the trimmed image for reference/debug
         const trimmedToPush = result?.trimmedDataUrl || dataUrl;
         images.push(trimmedToPush);

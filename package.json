@@ -15,7 +15,9 @@
     "@aws-sdk/client-s3": "^3.600.0",
     "@google/genai": "^1.26.0",
     "@google/generative-ai": "^0.24.1",
+    "fs": "^0.0.1-security",
     "node-fetch": "^2.7.0",
+    "path": "^0.12.7",
     "pdf-lib": "^1.17.1",
     "sharp": "^0.33.5"
   },
