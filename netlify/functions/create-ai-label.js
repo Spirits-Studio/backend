@@ -215,7 +215,7 @@ async function main(arg, { qs, method }) {
 
     // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
     const promptLines = [];
-    const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}. Ensure the design covers the entire canvas area with no white space.`;
+    const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}. Ensure the design covers the entire canvas area with no white space at a ${getResponseModalities(responseModalitiesValue)} aspect ratio.`;
     promptLines.push(initialPromptLine);
     if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
     if (logoInline) {
@@ -249,7 +249,6 @@ async function main(arg, { qs, method }) {
     try {
       response = await ai.models.generateContent({
         model: modelId,
-        // The SDK accepts a string or a structured "contents" array; a plain string is fine here.
         contents: finalPrompt,
         config: {
           responseModalities: getResponseModalities(responseModalitiesValue),
