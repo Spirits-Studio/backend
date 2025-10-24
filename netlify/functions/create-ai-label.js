@@ -1,3 +1,18 @@
+// --- Helper: fetch a template image from URL and convert to Gemini inlineData ---
+async function fetchTemplateInlineData(url) {
+  if (!url) return null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const ct = res.headers.get('content-type') || 'image/png';
+    const ab = await res.arrayBuffer();
+    const b64 = Buffer.from(ab).toString('base64');
+    return { mime: ct, data: b64 };
+  } catch (e) {
+    console.error('fetchTemplateInlineData error:', e?.message || e);
+    return null;
+  }
+}
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
@@ -283,7 +298,7 @@ function getResponseModalities(responseModalitiesValue, titleIn) {
 
 // --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
 async function checkAcceptableDimensions(attempt, dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
-  const { tolerance = 0.25, trimThreshold = 15 } = opts; // 25% tolerance
+  const { tolerance = 0.25, trimThreshold = 10 } = opts; // 25% tolerance
   try {
     const base64 = dataUrl.split(',')[1];
     const inputBuffer = Buffer.from(base64, 'base64');
@@ -356,6 +371,9 @@ async function main(arg, { qs, method }) {
     const logoDataUrl = pickDataUrl(body, ['logoDataUrl', 'logo']) || pickDataUrl(qs, ['logoDataUrl']);
     const logoInline = logoDataUrl ? dataUrlToInlineData(logoDataUrl) : null;
 
+    // Optional template URL
+    const templateUrl = body.templateUrl ?? qs.templateUrl ?? '';
+
     const bottleName = normaliseBottle(rawBottle);
     const designSide = normaliseSide(rawSide);
     const dims = labelDimensions[bottleName]?.[designSide] || null;
@@ -397,10 +415,32 @@ async function main(arg, { qs, method }) {
 
     const finalPrompt = buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, responseModalitiesValue)
     
-    console.log("responseModalities", getResponseModalities(responseModalitiesValue, titleIn))
-    console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
+    // console.log("responseModalities", getResponseModalities(responseModalitiesValue, titleIn))
+    // console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
-        
+
+    // Build generation contents (prompt + optional template image, optional logo)
+    let genContents;
+    let templateInline = null;
+    if (templateUrl) {
+      templateInline = await fetchTemplateInlineData(templateUrl);
+    }
+
+    if (templateInline || logoInline) {
+      const parts = [];
+      if (templateInline) {
+        parts.push({ inlineData: templateInline });
+      }
+      if (logoInline) {
+        parts.push({ inlineData: logoInline });
+      }
+      parts.push({ text: `${finalPrompt}\nUse the provided image as the base canvas. Preserve its pixel dimensions, fill the entire canvas (no borders), and design strictly within this template.` });
+      genContents = [{ role: 'user', parts }];
+    } else {
+      // Fallback: text-only contents
+      genContents = finalPrompt;
+    }
+
     const apiKey = getGeminiKey();
     if (!apiKey) {
       console.error("Gemini API key is missing (set GOOGLE_API_KEY or GEMINI_API_KEY).");
@@ -425,7 +465,7 @@ async function main(arg, { qs, method }) {
       try {
         response = await ai.models.generateContent({
           model: modelId,
-          contents: finalPrompt
+          contents: genContents
         });
       } catch (err) {
         console.error("Gemini generateContent error:", err?.message || err);
