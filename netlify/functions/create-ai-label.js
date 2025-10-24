@@ -252,9 +252,9 @@ async function main(arg, { qs, method }) {
         contents: finalPrompt,
         config: {
           responseModalities: getResponseModalities(responseModalitiesValue),
-          imageConfig: {
-            aspectRatio: getClosestAspectRatio(dims.width, dims.height),
-          },
+          // imageConfig: {
+          //   aspectRatio: getClosestAspectRatio(dims.width, dims.height),
+          // },
         }
       });
     } catch (err) {
