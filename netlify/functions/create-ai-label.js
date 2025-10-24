@@ -273,7 +273,6 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
     const initialPromptLine = `Using the provided template, design a creative and attractive label for a bottle of ${alcoholName}. Fill the template completely, and leave no white space.`;
     promptLines.push(initialPromptLine)
   }
-  promptLines.push(initialPromptLine);
   if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
   if (logoInline) {
     promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
