@@ -147,6 +147,7 @@ async function main(arg, { qs, method }) {
       hasSubtitle: Boolean(subtitleIn),
       primaryHex,
       secondaryHex,
+      logoDataUrl,
       logoInline: Boolean(logoInline),
       sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
     });
@@ -165,19 +166,25 @@ async function main(arg, { qs, method }) {
 
     // Build augmented prompt with exact physical constraints (printer-friendly phrasing)
     const promptLines = [];
-    const initialPromptLine = 'Design a creative and attractive label for a bottle of .';
+    const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}.`;
+    promptLines.push(initialPromptLine);
     if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
     if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
     if (primaryHex || secondaryHex) {
       promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
     }
     if (promptIn)   promptLines.push(promptIn);
+    // Logo inclusion instruction
+    if (logoInline) {
+      promptLines.push(`Incorporate the provided logo at the same dimensions into the label design as a prominent feature.`);
+    }
 
     const finalPrompt =
       `${promptLines.join('\n')}` +
       `\n\nImportant production constraints:\n` +
       `- The design must fit a label area of ${dims.width}mm (width) × ${dims.height}mm (height).\n` +
-      `- Provide a clean, print-ready image without borders beyond the trim at 300dpi and in a CMYK print format.` +
+      `- The design have square edges.` +
+      `- Provide a clean, print-ready image without visible borders beyond the trim at 300dpi and in a CMYK print format.` +
       `- Keep a 2mm trim (bleed) on all sides; keep key text/logos inside a safe margin.\n` +
       `- Return an image precisely the label size + trim: width = ${dims.width+2}mm, height = ${dims.height+2}mm.`;
 
