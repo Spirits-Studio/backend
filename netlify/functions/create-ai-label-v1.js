@@ -90,22 +90,6 @@ function dataUrlToInlineData(dataUrl) {
   } catch { return null; }
 }
 
-// Fetch a template image (by URL) and convert it to Gemini inlineData
-async function fetchTemplateInlineData(url) {
-  if (!url) return null;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const ct = res.headers.get('content-type') || 'image/png';
-    const ab = await res.arrayBuffer();
-    const b64 = Buffer.from(ab).toString('base64');
-    return { mime: ct, data: b64 };
-  } catch (e) {
-    console.error('fetchTemplateInlineData error:', e?.message || e);
-    return null;
-  }
-}
-
 async function trimWhiteBorder(input, opts = {}) {
   // Support both number and object forms: trimWhiteBorder(buf, 15) or trimWhiteBorder(buf, { threshold: 15 })
   const threshold = typeof opts === 'number' ? opts : (opts && typeof opts.threshold === 'number' ? opts.threshold : 12);
@@ -263,16 +247,9 @@ function getClosestAspectRatio(width, height) {
   return closest;
 }
 
-function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, frontLabel) {
+function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, responseModalitiesValue) {
   const promptLines = [];
-  if(designSide === 'back') {
-    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive label for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. Fill the template completely, and leave no white space.`;
-    promptLines.push(initialPromptLine)
-    frontLabel ? promptLines.push(frontLabel) : null;
-  } else {
-    const initialPromptLine = `Using the provided template, design a creative and attractive label for a bottle of ${alcoholName}. Fill the template completely, and leave no white space.`;
-    promptLines.push(initialPromptLine)
-  }
+  const initialPromptLine = `Design a creative and attractive label for a bottle of ${alcoholName}. The canvas should be ${dims.width+2}mm (width) x ${dims.height+2}mm height. Ensure the design covers the entire canvas area with no white space`;
   promptLines.push(initialPromptLine);
   if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
   if (logoInline) {
@@ -290,6 +267,19 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
     
     return finalPrompt
   }
+
+// Return Modalities array based on input value
+function getResponseModalities(responseModalitiesValue, titleIn) {
+  if(responseModalitiesValue === 'image_only') {
+    return ['Image'];
+
+  } else if(responseModalitiesValue === 'text_only' || Boolean(titleIn)) {
+    return ['Text', 'Image'];
+
+  } else {
+    return ['Image'];
+  }
+}
 
 // --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
 async function checkAcceptableDimensions(attempt, dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
@@ -352,6 +342,7 @@ async function main(arg, { qs, method }) {
     const rawBottle = body.bottleName ?? qs.bottleName ?? "";
     const rawSide   = body.designSide ?? qs.designSide ?? "";
     const sessionId = body.sessionId ?? qs.sessionId ?? "";
+    const responseModalitiesValue = body.responseModalitiesValue ?? qs.responseModalitiesValue ?? '';
     const titleIn = body.title ?? qs.title ?? '';
     const subtitleIn = body.subtitle ?? qs.subtitle ?? '';
     const promptIn = body.prompt ?? qs.prompt ?? "";
@@ -369,11 +360,6 @@ async function main(arg, { qs, method }) {
     const designSide = normaliseSide(rawSide);
     const dims = labelDimensions[bottleName]?.[designSide] || null;
 
-    // Build template URL from bottle/side convention
-    const templateUrl = bottleName && designSide
-      ? `https://barrel-n-bond.s3.eu-west-2.amazonaws.com/templates/${bottleName.toLowerCase()}/${designSide}.png`
-      : '';
-
     console.log('create-ai-label incoming:', {
       method,
       alcoholName,
@@ -381,6 +367,7 @@ async function main(arg, { qs, method }) {
       designSide,
       width: dims.width,
       height: dims.height,
+      responseModalitiesValue,
       hasPrompt: Boolean(promptIn),
       hasTitle: Boolean(titleIn),
       hasSubtitle: Boolean(subtitleIn),
@@ -402,12 +389,17 @@ async function main(arg, { qs, method }) {
       console.error("Prompt not provided");
       return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
     }
-
-    const finalPrompt = buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, null)
     
+    if (!responseModalitiesValue) {
+      console.error("Response Modalities not provided");
+      return { statusCode: 400, body: JSON.stringify({ message: "Response Modalities not provided" }) };
+    }
+
+    const finalPrompt = buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, responseModalitiesValue)
+    
+    // console.log("responseModalities", getResponseModalities(responseModalitiesValue, titleIn))
     // console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
-    console.log("Template URL:", templateUrl || '(none)');
         
     const apiKey = getGeminiKey();
     if (!apiKey) {
@@ -418,55 +410,92 @@ async function main(arg, { qs, method }) {
     const ai = new GoogleGenAI({ apiKey });
     const modelId = "gemini-2.5-flash-image";
 
-    // Prepare contents with backend-handled template
-    let genContents = finalPrompt; // fallback to text only
-    try {
-      const templateInline = await fetchTemplateInlineData(templateUrl);
-      const parts = [];
-      if (templateInline) parts.push({ inlineData: templateInline });
-      if (logoInline) parts.push({ inlineData: logoInline });
-      parts.push({ text: `${finalPrompt}\nUse the provided image as the base canvas. Preserve its pixel dimensions and design strictly within this template. Do not add white borders.` });
-      genContents = [{ role: 'user', parts }];
-    } catch (e) {
-      console.warn('Template fetch failed; falling back to text-only prompt.', e?.message || e);
-    }
-
-    // --- Simple single-shot generation for dev: return whatever the AI creates ---
-    // (All trimming, aspect checks, and composing commented out temporarily.)
+    // --- Retry loop for generation, trimming, aspect check, and label composing ---
     let images = [];
     let modelMessage = "";
+    let finalLabelDataUrl = "";
 
-    let response;
-    try {
-      response = await ai.models.generateContent({
-        model: modelId,
-        contents: genContents,
-      });
-    } catch (err) {
-      console.error("Gemini generateContent error:", err?.message || err);
-      return { statusCode: 502, body: JSON.stringify({ message: "Gemini API error", error: String(err?.message || err) }) };
-    }
+    const maxAttempts = 3;
+    let attempt = 0;
+    let madeAcceptable = false;
 
-    const parts = response?.candidates?.[0]?.content?.parts || [];
-    for (const part of parts) {
-      if (part.text) {
-        modelMessage += (modelMessage ? "\n" : "") + part.text;
-      } else if (part.inlineData?.data) {
-        const mime = part.inlineData?.mime || 'image/png';
+    while (attempt < maxAttempts && !madeAcceptable) {
+      attempt++;
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: modelId,
+          contents: finalPrompt
+        });
+      } catch (err) {
+        console.error("Gemini generateContent error:", err?.message || err);
+        return { statusCode: 502, body: JSON.stringify({ message: "Gemini API error", error: String(err?.message || err) }) };
+      }
+
+      const parts = response?.candidates?.[0]?.content?.parts || [];
+      images.length = 0;
+      modelMessage = "";
+
+      let attemptAcceptable = false;
+      let attemptLabelBuffer = null;
+
+      for (const part of parts) {
+        if (part.text) {
+          modelMessage += (modelMessage ? "\n" : "") + part.text;
+          continue;
+        }
+        if (!part.inlineData?.data) continue;
+
+        const mime = part.inlineData?.mime || "image/png";
         const dataUrl = `data:${mime};base64,${part.inlineData.data}`;
-        images.push(dataUrl);
-        // Debug preview
-        try { addDebugImage(Buffer.from(part.inlineData.data, 'base64'), `ai-output-${images.length}`); } catch (_) {}
+
+        // Step 2-3: Trim + assess aspect ratio
+        const result = await checkAcceptableDimensions(attempt, dataUrl, dims.width, dims.height, { tolerance: 0.25, trimThreshold: 15 });
+        console.log(`Attempt ${attempt}: acceptable=${!!result?.acceptable} ratioDiff=${(result?.ratioDiff*100).toFixed(1)}% target=${result?.targetRatio?.toFixed?.(3)} pixel=${result?.pixelRatio?.toFixed?.(3)}`);
+        // saveDebugImage(result.trimmedBuffer, `attempt${attempt}-trimmed`);
+        
+        // Always store the trimmed image for reference/debug
+        const trimmedToPush = result?.trimmedDataUrl || dataUrl;
+        images.push(trimmedToPush);
+
+        if (!result?.acceptable) {
+          console.log(`Attempt ${attempt}: aspect ratio off by ${(result?.ratioDiff*100).toFixed(1)}% (>25%). Retrying…`);
+          attemptAcceptable = false;
+          continue;
+        }
+
+        // Step 4b: acceptable → detect first content colour and compose final label
+        const edgeHex = await detectFirstContentColour(result.trimmedBuffer, 245, 2);
+
+        const labelBuffer = await composeLabel(
+          result.trimmedBuffer,
+          dims.width + 2,
+          dims.height + 2,
+          edgeHex,
+          300
+        );
+
+        addDebugImage(labelBuffer, `attempt${attempt}-final`)
+
+        finalLabelDataUrl = `data:image/png;base64,${labelBuffer.toString('base64')}`;
+        attemptLabelBuffer = labelBuffer;
+        attemptAcceptable = true;
+      }
+
+      if (attemptAcceptable) {
+        madeAcceptable = true;
       }
     }
 
-    // // Old retry/processing path (kept for reference):
-    // // - Trim white borders
-    // // - Check aspect ratio
-    // // - Retry up to 3x if >25% out
-    // // - Compose final label (dims.width+2 x dims.height+2) with edge color background
-    // //
-    // // Code removed for now per request
+    if (!madeAcceptable) {
+      return {
+        statusCode: 422,
+        body: JSON.stringify({
+          message: "Our AI model could not generate label with the correct dimensions. Please try again",
+          ...(debugOn ? { debugImages } : {}),
+        })
+      };
+    }
 
     return {
       statusCode: 200,
@@ -479,6 +508,7 @@ async function main(arg, { qs, method }) {
         height_mm: dims.height,
         images,
         modelMessage,
+        finalLabelDataUrl,
         ...(debugOn ? { debugImages } : {}),
       }),
     };
