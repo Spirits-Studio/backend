@@ -275,12 +275,12 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
 
   const promptLines = [];
   if(designSide === 'back') {
-    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive ${orientation} label design for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. The label design should fill the template completely, and leave no white space.`;
+    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. Fill the template completely, leave no white space, and do not add a border.`;
 
     promptLines.push(initialPromptLine)
     frontLabel ? promptLines.push(frontLabel) : null;
   } else {
-    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive ${orientation} label design for a bottle of ${alcoholName}. Fill the template completely, and leave no white space.`;
+    const initialPromptLine = `Using the provided template, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}. Fill the template completely, leave no white space, and do not add a border.`;
     promptLines.push(initialPromptLine)
   }
   if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
@@ -454,6 +454,7 @@ async function main(arg, { qs, method }) {
     let modelMessage = "";
 
     let response;
+    console.log("contents sent to Gemini:", Array.isArray(genContents) ? genContents.map(c => c.parts ? `[${c.parts.length} parts]` : c.text).join(' | ') : genContents);
     try {
       response = await ai.models.generateContent({
         model: modelId,
