@@ -86,7 +86,7 @@ function dataUrlToInlineData(dataUrl) {
     const [, meta, b64] = dataUrl.match(/^data:(.*?);base64,(.*)$/) || [];
     if (!b64) return null;
     const mime = meta && meta.includes('/') ? meta : 'image/png';
-    return { mime, data: b64 };
+    return { mimeType: mime, data: b64 };
   } catch { return null; }
 }
 
@@ -99,7 +99,7 @@ async function fetchTemplateInlineData(url) {
     const ct = res.headers.get('content-type') || 'image/png';
     const ab = await res.arrayBuffer();
     const b64 = Buffer.from(ab).toString('base64');
-    return { mime: ct, data: b64 };
+    return { mimeType: ct, data: b64 };
   } catch (e) {
     console.error('fetchTemplateInlineData error:', e?.message || e);
     return null;
@@ -451,7 +451,7 @@ async function main(arg, { qs, method }) {
       if (part.text) {
         modelMessage += (modelMessage ? "\n" : "") + part.text;
       } else if (part.inlineData?.data) {
-        const mime = part.inlineData?.mime || 'image/png';
+        const mime = part.inlineData?.mimeType || part.inlineData?.mime || 'image/png';
         const dataUrl = `data:${mime};base64,${part.inlineData.data}`;
         images.push(dataUrl);
         // Debug preview
