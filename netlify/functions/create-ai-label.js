@@ -229,10 +229,7 @@ async function main(arg, { qs, method }) {
 
     const finalPrompt =
       `${promptLines.join('\n')}` +
-      `\n\nImportant production constraints:\n` +
-      `- The design must fit a label area of ${dims.width+2}mm (width) × ${dims.height+2}mm (height).\n` +
-      `- The design have square edges.` +
-      `- Provide a clean, print-ready image without visible borders beyond the trim at 300dpi and in a CMYK print format.`
+      `- The design must have square edges.`
 
       console.log("responseModalities", getResponseModalities(responseModalitiesValue))
       console.log("aspectRatio", getClosestAspectRatio(dims.width, dims.height))
