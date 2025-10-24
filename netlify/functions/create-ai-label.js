@@ -263,6 +263,10 @@ function getClosestAspectRatio(width, height) {
   return closest;
 }
 
+function getRegulatoryImages() {
+
+}
+
 function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, frontLabel) {
   let orientation = ''
   if(dims.width === dims.height) {
@@ -274,15 +278,22 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
   }
 
   const promptLines = [];
+  const regulatoryInfo = [];
   if(designSide === 'back') {
-    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. Fill the template completely, leave no white space, and do not add a border.`;
+    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}.`;
+    regulatoryInfo.push("40% ABV", "70cl", "Please drink responsibly", "Distilled by Barrel n Bond @ 85 Nightingale Ln, London SW12 8NX", "The UK Chief Medical Officers recommend adults do not regularly drink more than 14 units per week")
 
     promptLines.push(initialPromptLine)
+
     frontLabel ? promptLines.push(frontLabel) : null;
+
   } else {
-    const initialPromptLine = `Using the provided template, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}. Ensure that the contents of the template remain visible and unchanged. Fill the template completely, leave no white space, and do not add a border.`;
+    const initialPromptLine = `Using the provided template, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}.`;
     promptLines.push(initialPromptLine)
+    
+    regulatoryInfo.push("40% ABV")
   }
+
   if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
   if (logoInline) {
     promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
@@ -295,7 +306,11 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
 
   const finalPrompt =
     `${promptLines.join('\n')}` +
-    `- The design must have square corners.`
+    `- The design must have square corners.` +
+    `- Fill the template completely, leave no white space, and do not add a border.` +
+    `- Include the following regulatory information in a clear and legible manner: ${regulatoryInfo.join(', ')}.` +
+    `- Ensure all text is easily readable and stands out against the background.`;
+
     
     return finalPrompt
   }
