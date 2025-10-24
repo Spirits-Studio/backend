@@ -300,7 +300,13 @@ async function main(arg, { qs, method }) {
     let acceptableDimensionsUrls = []
 
     async function checkAcceptableDimensions(dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
+      console.log('checkAcceptableDimensions dataUrl:', dataUrl.slice(0, 30) + '…');
+      console.log('checkAcceptableDimensions targetWidthMm:', targetWidthMm);
+      console.log('checkAcceptableDimensions targetHeightMm:', targetHeightMm);
+      console.log('checkAcceptableDimensions opts:', opts);
+
       const { tolerance = 0.03, trimThreshold = 15 } = opts; // ~3% aspect-ratio tolerance
+
       try {
         // Convert data URL -> Buffer for Sharp
         const base64 = dataUrl.split(',')[1];
@@ -308,6 +314,11 @@ async function main(arg, { qs, method }) {
 
         // Trim white border and get new dimensions
         const { buffer: croppedBuffer, original, cropped, removed } = await trimWhiteBorder(inputBuffer, trimThreshold);
+          console.log('checkAcceptableDimensions croppedBuffer.length:', croppedBuffer.length);
+          console.log('checkAcceptableDimensions original:', original);
+          console.log('checkAcceptableDimensions cropped:', cropped);
+          console.log('checkAcceptableDimensions removed:', removed);
+
 
         // Build a data URL for the cropped image to keep flow simple
         const croppedDataUrl = `data:image/png;base64,${croppedBuffer.toString('base64')}`;
@@ -315,10 +326,14 @@ async function main(arg, { qs, method }) {
         // Compare aspect ratios (we only have mm targets, so compare ratios)
         const targetRatio = targetWidthMm / targetHeightMm;
         const pixelRatio = (cropped.width || 1) / (cropped.height || 1);
+        console.log('checkAcceptableDimensions targetRatio:', targetRatio);
+        console.log('checkAcceptableDimensions pixelRatio:', pixelRatio);
 
         // Relative difference
         const ratioDiff = Math.abs(pixelRatio - targetRatio) / targetRatio;
+        console.log('checkAcceptableDimensions ratioDiff:', ratioDiff);
         const acceptable = ratioDiff <= tolerance;
+        console.log('checkAcceptableDimensions acceptable:', acceptable);
 
         return {
           acceptable,
