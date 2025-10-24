@@ -17,7 +17,7 @@
     "@google/generative-ai": "^0.24.1",
     "node-fetch": "^2.7.0",
     "pdf-lib": "^1.17.1",
-    "sharp": "^0.33.2"
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "netlify-cli": "^17.34.0"
