@@ -263,10 +263,6 @@ function getClosestAspectRatio(width, height) {
   return closest;
 }
 
-function getRegulatoryImages() {
-
-}
-
 function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, frontLabel) {
   const orientation =
     dims.width === dims.height ? 'square' :
@@ -335,7 +331,7 @@ async function buildContents({ templateUrl, logoInline, designSide, inspirationI
 
   // Inspiration (front label, for back designs)
   if (designSide === "back" && inspirationInline) {
-    parts.push({ text: "FRONT LABEL — Use this image strictly as style inspiration for the BACK label background. Match palette, texture, motifs, and visual weight. Do NOT copy any text or logos from it." });
+    parts.push({ text: "FRONT LABEL — Use this image strictly as style inspiration for the BACK label background. Match palette, texture, motifs, and visual weight. Do NOT copy any text, logos, or characters from it." });
     parts.push({ inlineData: inspirationInline });
   }
 
