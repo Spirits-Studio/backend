@@ -286,29 +286,29 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
     if (promptIn) promptLines.push(`Design guidance: ${promptIn}`);
     promptLines.push(`Ensure there is sufficient low-detail area to allow later overlay of regulatory text.`);
     promptLines.push(`Fill the template completely to all edges with no borders; corners must be square.`);
-    return promptLines.join('\n');
+
+  } else if(designSide === 'front') {
+    // FRONT label
+    promptLines.push(`You are designing the FRONT label for a bottle of ${alcoholName} (${orientation}).`);
+    promptLines.push(`Use the provided TEMPLATE as the exact canvas. Remove the ${aiLabelTemplateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio.`);
+    promptLines.push(`Fill the template completely (no borders). Corners must be square.`);
+  
+    if (promptIn) promptLines.push(`Creative direction: ${promptIn}`);
+    if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
+    if (titleIn) promptLines.push(`Bottle title text: "${titleIn}".`);
+    if (subtitleIn) promptLines.push(`Bottle subtitle text: "${subtitleIn}".`);
+    if (primaryHex || secondaryHex) {
+      promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary).`);
+    }
+  
+    regulatoryInfo.push("40% ABV"); // extend if desired
+    promptLines.push(`Include the following regulatory information clearly and legibly: ${regulatoryInfo.join(', ')}.`);
+    promptLines.push(`Ensure all text is highly readable with adequate contrast.`);
+
   }
-
-  // FRONT label
-  const lines = [];
-  lines.push(`You are designing the FRONT label for a bottle of ${alcoholName} (${orientation}).`);
-  lines.push(`Use the provided TEMPLATE as the exact canvas. Preserve its pixel dimensions and aspect ratio.`);
-  lines.push(`Fill the template completely (no borders). Corners must be square.`);
-
-  if (promptIn) lines.push(`Creative direction: ${promptIn}`);
-  if (logoInline) lines.push(`Include the provided LOGO exactly as given (do not alter).`);
-  if (titleIn) lines.push(`Bottle title text: "${titleIn}".`);
-  if (subtitleIn) lines.push(`Bottle subtitle text: "${subtitleIn}".`);
-  if (primaryHex || secondaryHex) {
-    lines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary).`);
-  }
-
-  regulatoryInfo.push("40% ABV"); // extend if desired
-  lines.push(`Include the following regulatory information clearly and legibly: ${regulatoryInfo.join(', ')}.`);
-  lines.push(`Ensure all text is highly readable with adequate contrast.`);
-
-  return lines.join('\n');
+  return promptLines.join('\n');
 }
+
 
 // Build Gemini contents (parts array) in one place for legibility
 async function buildContents({ templateUrl, logoInline, designSide, inspirationInline, finalPrompt }) {
@@ -319,7 +319,7 @@ async function buildContents({ templateUrl, logoInline, designSide, inspirationI
     try {
       const templateInline = await fetchTemplateInlineData(templateUrl);
       if (templateInline) {
-        parts.push({ text: "TEMPLATE CANVAS — Use this as the exact base. Preserve its size, pixel dimensions, and aspect ratio. Fill edge-to-edge with no borders; corners must be square." });
+        parts.push({ text: `TEMPLATE CANVAS — Use this as the exact base. Remove the ${aiLabelTemplateColour} background colour, and its size, pixel dimensions, and aspect ratio. Fill edge-to-edge with no borders; corners must be square.` });
         parts.push({ inlineData: templateInline });
       }
     } catch (e) {
@@ -340,7 +340,7 @@ async function buildContents({ templateUrl, logoInline, designSide, inspirationI
   }
 
   // Final textual brief (kept as a single block for readability)
-  parts.push({ text: `${finalPrompt}\n\nRe-state constraints: Use the template as the base. Preserve its pixel dimensions. No white borders; square corners. If BACK, no text or icons at all.` });
+  parts.push({ text: `${finalPrompt}\n\nRe-state constraints: Use the template as the base. Preserve its pixel dimensions. Remove the ${aiLabelTemplateColour} background colour. No white borders; square corners.` });
 
   return [{ role: "user", parts }];
 }
