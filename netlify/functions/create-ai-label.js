@@ -275,6 +275,10 @@ function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleI
     // BACK label — purely background, explicitly tied to the FRONT inspiration image
     promptLines.push(`You are designing the BACK label background for this bottle (${orientation}).`);
     promptLines.push(`Create a clean, text-free background that complements the FRONT label's overall style (palette, texture, motifs, visual weight).`);
+    promptLines.push(`ABSOLUTELY NO figurative content: no characters, creatures, people, animals, mascots, faces, hands, tentacles, crabs, fish, silhouettes; and no objects such as bottles, logos, icons, barcodes, or recognizable items.`);
+    promptLines.push(`Use only non-figurative background elements: gradients, soft light rays, gentle bokeh, low-detail textures, abstract patterns. If using plants/seaweed motifs, keep them highly abstract and non-recognizable.`);
+    promptLines.push(`If the FRONT inspiration shows any characters or objects, treat them as forbidden elements — carry over only palette, lighting mood, and texture.`);
+    promptLines.push(`Reserve a calm, low-detail zone across at least 60% of the canvas to keep future text readable.`);
     promptLines.push(`Do NOT copy any text, logos, barcodes, or icons from the front. This is a background only.`);
     if (primaryHex || secondaryHex) {
       promptLines.push(`Use this colour palette when in doubt — primary: ${primaryHex || '—'}, secondary: ${secondaryHex || '—'}.`);
@@ -331,7 +335,7 @@ async function buildContents({ templateUrl, logoInline, designSide, inspirationI
 
   // Inspiration (front label, for back designs)
   if (designSide === "back" && inspirationInline) {
-    parts.push({ text: "FRONT LABEL — Use this image strictly as style inspiration for the BACK label background. Match palette, texture, motifs, and visual weight. Do NOT copy any text, logos, or characters from it." });
+    parts.push({ text: "FRONT LABEL — Use this image strictly as style inspiration for the BACK label background. Match palette, texture, motifs, and visual weight. Do NOT copy any text, logos, characters, creatures, people, animals, bottles, or any identifiable objects from it." });
     parts.push({ inlineData: inspirationInline });
   }
 
