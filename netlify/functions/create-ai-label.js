@@ -268,53 +268,84 @@ function getRegulatoryImages() {
 }
 
 function buildPrompt(alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, designSide, frontLabel) {
-  let orientation = ''
-  if(dims.width === dims.height) {
-    orientation = 'square ';
-  } else if(dims.width >= dims.height) {
-    orientation = 'landscape'
-  } else {
-    orientation = 'portrait'
-  }
+  const orientation =
+    dims.width === dims.height ? 'square' :
+    dims.width >= dims.height ? 'landscape' : 'portrait';
 
   const promptLines = [];
   const regulatoryInfo = [];
 
-  if(designSide === 'back') {
-    const initialPromptLine = `Using the provided template, and the attached inspiration file, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}.`;
-    regulatoryInfo.push("40% ABV", "70cl", "Please drink responsibly", "Distilled by Barrel n Bond @ 85 Nightingale Ln, London SW12 8NX", "The UK Chief Medical Officers recommend adults do not regularly drink more than 14 units per week")
-
-    promptLines.push(initialPromptLine)
-
-    frontLabel ? promptLines.push(frontLabel) : null;
-
-  } else {
-    const initialPromptLine = `Using the provided template, design a creative and attractive label (in ${orientation}) for a bottle of ${alcoholName}.`;
-    promptLines.push(initialPromptLine)
-    
-    regulatoryInfo.push("40% ABV")
-    if (promptIn)   promptLines.push(`Design Prompt: ${promptIn}`);
-    if (logoInline) {
-      promptLines.push(`Incorporate the provided logo unchanged, at the same dimensions into the label design as a prominent feature.`);
-    }
-    if (titleIn)    promptLines.push(`Bottle Title: ${titleIn}`);
-    if (subtitleIn) promptLines.push(`Bottle Subtitle: ${subtitleIn}`);
+  if (designSide === 'back') {
+    // BACK label — purely background, explicitly tied to the FRONT inspiration image
+    promptLines.push(`You are designing the BACK label background for this bottle (${orientation}).`);
+    promptLines.push(`Create a clean, text-free background that complements the FRONT label's overall style (palette, texture, motifs, visual weight).`);
+    promptLines.push(`Do NOT copy any text, logos, barcodes, or icons from the front. This is a background only.`);
     if (primaryHex || secondaryHex) {
-      promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary)`);
+      promptLines.push(`Use this colour palette when in doubt — primary: ${primaryHex || '—'}, secondary: ${secondaryHex || '—'}.`);
+    }
+    if (promptIn) promptLines.push(`Design guidance: ${promptIn}`);
+    promptLines.push(`Ensure there is sufficient low-detail area to allow later overlay of regulatory text.`);
+    promptLines.push(`Fill the template completely to all edges with no borders; corners must be square.`);
+    return promptLines.join('\n');
+  }
+
+  // FRONT label
+  const lines = [];
+  lines.push(`You are designing the FRONT label for a bottle of ${alcoholName} (${orientation}).`);
+  lines.push(`Use the provided TEMPLATE as the exact canvas. Preserve its pixel dimensions and aspect ratio.`);
+  lines.push(`Fill the template completely (no borders). Corners must be square.`);
+
+  if (promptIn) lines.push(`Creative direction: ${promptIn}`);
+  if (logoInline) lines.push(`Include the provided LOGO exactly as given (do not alter).`);
+  if (titleIn) lines.push(`Bottle title text: "${titleIn}".`);
+  if (subtitleIn) lines.push(`Bottle subtitle text: "${subtitleIn}".`);
+  if (primaryHex || secondaryHex) {
+    lines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary).`);
+  }
+
+  regulatoryInfo.push("40% ABV"); // extend if desired
+  lines.push(`Include the following regulatory information clearly and legibly: ${regulatoryInfo.join(', ')}.`);
+  lines.push(`Ensure all text is highly readable with adequate contrast.`);
+
+  return lines.join('\n');
+}
+
+// Build Gemini contents (parts array) in one place for legibility
+async function buildContents({ templateUrl, logoInline, designSide, inspirationInline, finalPrompt }) {
+  const parts = [];
+
+  // Template canvas
+  if (templateUrl) {
+    try {
+      const templateInline = await fetchTemplateInlineData(templateUrl);
+      if (templateInline) {
+        parts.push({ text: "TEMPLATE CANVAS — Use this as the exact base. Preserve its pixel dimensions and aspect ratio. Fill edge-to-edge with no borders; corners must be square." });
+        parts.push({ inlineData: templateInline });
+      }
+    } catch (e) {
+      console.warn("buildContents: template fetch failed:", e?.message || e);
     }
   }
 
-
-  const finalPrompt =
-    `${promptLines.join('\n')}` +
-    `- The design must have square corners.` +
-    `- Fill the template completely, leave no white space, and do not add a border.` +
-    `- Include the following regulatory information in a clear and legible manner: ${regulatoryInfo.join(', ')}.` +
-    `- Ensure all text is easily readable and stands out against the background.`;
-
-    
-    return finalPrompt
+  // Logo (front only, when provided)
+  if (logoInline && designSide === "front") {
+    parts.push({ text: "LOGO — Include this logo exactly as provided. Do not alter its colours or proportions." });
+    parts.push({ inlineData: logoInline });
   }
+
+  // Inspiration (front label, for back designs)
+  if (designSide === "back" && inspirationInline) {
+    parts.push({ text: "FRONT LABEL — Use this image strictly as style inspiration for the BACK label background. Match palette, texture, motifs, and visual weight. Do NOT copy any text or logos from it." });
+    parts.push({ inlineData: inspirationInline });
+  }
+
+  // Final textual brief (kept as a single block for readability)
+  parts.push({ text: `${finalPrompt}\n\nRe-state constraints: Use the template as the base. Preserve its pixel dimensions. No white borders; square corners. If BACK, no text or icons at all.` });
+
+  return [{ role: "user", parts }];
+}
+
+
 
 // --- Improved checkAcceptableDimensions for 25% tolerance, returns trimmed image and ratio info ---
 async function checkAcceptableDimensions(attempt, dataUrl, targetWidthMm, targetHeightMm, opts = {}) {
@@ -454,30 +485,14 @@ async function main(arg, { qs, method }) {
     const ai = new GoogleGenAI({ apiKey });
     const modelId = "gemini-2.5-flash-image";
 
-    // Prepare contents with backend-handled template
-    let genContents = finalPrompt; // fallback to text only
-    try {
-      const templateInline = await fetchTemplateInlineData(templateUrl);
-      const parts = [];
-      if (templateInline) {
-        parts.push({ text: "This is the template canvas to design upon." });
-        parts.push({ inlineData: templateInline });
-      }
-
-      if (logoInline) {
-        parts.push({ text: "This is the logo to include unchanged in the final design." });
-        parts.push({ inlineData: logoInline });
-      }
-      if (designSide === 'back' && inspirationInline) {
-        parts.push({ text: "This is the front label to use as design inspiration; match its style and complement it." });
-        parts.push({ inlineData: inspirationInline });
-      }
-      parts.push({ text: `${finalPrompt}\nUse the template as the base canvas. Preserve its pixel dimensions. Do not add white borders.` });
-      genContents = [{ role: 'user', parts }];
-
-    } catch (e) {
-      console.warn('Template fetch failed; falling back to text-only prompt.', e?.message || e);
-    }
+    // Prepare contents in one place for better legibility
+    let genContents = await buildContents({
+      templateUrl,
+      logoInline,
+      designSide,
+      inspirationInline,
+      finalPrompt
+    });
 
     // --- Simple single-shot generation for dev: return whatever the AI creates ---
     // (All trimming, aspect checks, and composing commented out temporarily.)
