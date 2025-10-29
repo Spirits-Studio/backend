@@ -523,6 +523,25 @@ async function main(arg, { qs, method }) {
         try { addDebugImage(Buffer.from(part.inlineData.data, 'base64'), `ai-output-${images.length}`); } catch (_) {}
       }
     }
+    // --- Post-process: trim white borders from all AI images (front & back) ---
+    // Uses trimWhiteBorder to find the first non-white pixel from all sides.
+    try {
+      const trimmedImages = [];
+      for (let idx = 0; idx < images.length; idx++) {
+        const dataUrl = images[idx];
+        const b64 = (dataUrl.split(',')[1] || '').trim();
+        if (!b64) { trimmedImages.push(dataUrl); continue; }
+        const inputBuf = Buffer.from(b64, 'base64');
+        const { buffer: trimmedBuf } = await trimWhiteBorder(inputBuf, { threshold: 12 });
+        // Debug preview (only if debug=1)
+        try { addDebugImage(trimmedBuf, `ai-output-${idx + 1}-trimmed`); } catch(_) {}
+        const trimmedDataUrl = `data:image/png;base64,${trimmedBuf.toString('base64')}`;
+        trimmedImages.push(trimmedDataUrl);
+      }
+      images = trimmedImages;
+    } catch (e) {
+      console.warn('Post-trim step failed; returning untrimmed images.', e?.message || e);
+    }
     const firstImage = images[0] || '';
 
     // // Old retry/processing path (kept for reference):
