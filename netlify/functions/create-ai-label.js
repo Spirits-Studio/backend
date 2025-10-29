@@ -319,7 +319,7 @@ async function buildContents({ templateUrl, logoInline, designSide, inspirationI
     try {
       const templateInline = await fetchTemplateInlineData(templateUrl);
       if (templateInline) {
-        parts.push({ text: "TEMPLATE CANVAS — Use this as the exact base. Preserve its pixel dimensions and aspect ratio. Fill edge-to-edge with no borders; corners must be square." });
+        parts.push({ text: "TEMPLATE CANVAS — Use this as the exact base. Preserve its size, pixel dimensions, and aspect ratio. Fill edge-to-edge with no borders; corners must be square." });
         parts.push({ inlineData: templateInline });
       }
     } catch (e) {
@@ -432,8 +432,10 @@ async function main(arg, { qs, method }) {
     const dims = labelDimensions[bottleName]?.[designSide] || null;
 
     // Build template URL from bottle/side convention
+    const aiLabelTemplateColour = process.env.AI_LABEL_TEMPLATE_COLOUR || 'black';
+
     const templateUrl = bottleName && designSide
-      ? `https://barrel-n-bond.s3.eu-west-2.amazonaws.com/templates/${bottleName.toLowerCase()}/${designSide}.png`
+      ? `https://barrel-n-bond.s3.eu-west-2.amazonaws.com/templates/2mm_trim_bleed/${bottleName.toLowerCase()}/${aiLabelTemplateColour}/${designSide}.png`
       : '';
 
     console.log('create-ai-label incoming:', {
