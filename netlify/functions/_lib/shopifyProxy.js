@@ -98,6 +98,8 @@ function corsHeaders(origin) {
   const ALLOWED_ORIGINS = new Set([
     'https://barrelnbond.com',
     'https://www.barrelnbond.com',
+    'https://spiritsstudio.co.uk',
+    'https://www.spiritsstudio.co.uk',
     'https://wnbrmm-sg.myshopify.com',
     'http://127.0.0.1:9292',
     'https://127.0.0.1:9292',
@@ -115,7 +117,7 @@ function corsHeaders(origin) {
     headers['Vary'] = 'Origin';
   } else {
     // default to production site only
-    headers['Access-Control-Allow-Origin'] = 'https://barrelnbond.com';
+    headers['Access-Control-Allow-Origin'] = 'https://spiritsstudio.co.uk';
   }
 
   return headers;
