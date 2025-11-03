@@ -50,13 +50,21 @@ export function withShopifyProxy(
     delete qs.signature; delete qs.hmac;
 
     const message = Object.keys(qs).sort().map(k => `${k}=${qs[k] ?? ""}`).join("");
+
+    const secret = process.env.SHOPIFY_API_SECRET || process.env.SHOPIFY_CLIENT_SECRET;
+    if (!secret) {
+      return respond(500, "Missing Shopify app secret (SHOPIFY_API_SECRET)");
+    }
+
+    const providedHex = String(provided).toLowerCase();
+
     const digestHex = crypto
-      .createHmac("sha256", process.env.SHOPIFY_CLIENT_SECRET)
+      .createHmac("sha256", secret)
       .update(message, "utf8")
       .digest("hex");
 
     const a = Buffer.from(digestHex, "hex");
-    const b = Buffer.from(provided, "hex");
+    const b = Buffer.from(providedHex, "hex");
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
       return respond(401, "Unauthorized");
     }
@@ -75,6 +83,7 @@ export function withShopifyProxy(
         const merged = new Headers(res.headers);
         const cors = corsHeaders(originHeader);
         Object.keys(cors).forEach((k) => merged.set(k, cors[k]));
+        merged.set('X-Proxy-Verified', '1');
         const body = await res.text();
         return new Response(body, { status: res.status, headers: merged });
       }
