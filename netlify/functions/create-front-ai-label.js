@@ -461,21 +461,42 @@ async function main(arg, { qs, method }) {
     // --- Post-process: trim white borders from all AI images (front & back) ---
     // Uses trimWhiteBorder to find the first non-white pixel from all sides.
     try {
-      const trimmedImages = [];
+      const processedImages = [];
       for (let idx = 0; idx < images.length; idx++) {
         const dataUrl = images[idx];
         const b64 = (dataUrl.split(',')[1] || '').trim();
-        if (!b64) { trimmedImages.push(dataUrl); continue; }
+        if (!b64) { processedImages.push(dataUrl); continue; }
+
         const inputBuf = Buffer.from(b64, 'base64');
         const { buffer: trimmedBuf } = await trimWhiteBorder(inputBuf, { threshold: 12 });
-        // Debug preview (only if debug=1)
+
+        // Detect a reasonable background colour to use when composing to target size
+        let bgHex = primaryHex || secondaryHex || '#FFFFFF';
+        try {
+          const detected = await detectFirstContentColour(trimmedBuf);
+          if (detected) bgHex = detected;
+        } catch (colourErr) {
+          console.warn('detectFirstContentColour failed, fallback to palette/default.', colourErr?.message || colourErr);
+        }
+
+        // Compose onto a canvas sized to the exact mm dimensions (converted via DPI)
+        let composedBuf = trimmedBuf;
+        try {
+          composedBuf = await composeLabel(trimmedBuf, dims.width, dims.height, bgHex);
+        } catch (composeErr) {
+          console.warn('composeLabel failed; returning trimmed image instead.', composeErr?.message || composeErr);
+        }
+
+        // Debug previews (only if debug=1)
         try { addDebugImage(trimmedBuf, `ai-output-${idx + 1}-trimmed`); } catch(_) {}
-        const trimmedDataUrl = `data:image/png;base64,${trimmedBuf.toString('base64')}`;
-        trimmedImages.push(trimmedDataUrl);
+        try { addDebugImage(composedBuf, `ai-output-${idx + 1}-composed`); } catch(_) {}
+
+        const composedDataUrl = `data:image/png;base64,${composedBuf.toString('base64')}`;
+        processedImages.push(composedDataUrl);
       }
-      images = trimmedImages;
+      images = processedImages;
     } catch (e) {
-      console.warn('Post-trim step failed; returning untrimmed images.', e?.message || e);
+      console.warn('Post-process resize step failed; returning original images.', e?.message || e);
     }
     const firstImage = images[0] || '';
 
