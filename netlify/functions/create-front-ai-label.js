@@ -225,7 +225,7 @@ function normaliseBottle(name = "") {
   if (!name) return "";
   return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 }
-function buildPrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, templateColour }) {
+function buildPrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, templateColour, includeHexes }) {
   const orientation =
     dims.width === dims.height ? 'square' :
     dims.width >= dims.height ? 'landscape' : 'portrait';
@@ -240,12 +240,12 @@ function buildPrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitl
   if (promptIn) promptLines.push(`Creative direction: ${promptIn}`);
   if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
   if (titleIn) promptLines.push(`Bottle title text: "${titleIn}".`);
-  if (subtitleIn) promptLines.push(`Bottle subtitle text: "${subtitleIn}".`);
-  if (primaryHex || secondaryHex) {
+  subtitleIn ? promptLines.push(`Bottle subtitle text: "${subtitleIn}".`) : promptLines.push(`No subtitle text is needed.`);
+  if (includeHexes) {
     promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary).`);
   }
 
-  regulatoryInfo.push("40% ABV"); // extend if desired
+  regulatoryInfo.push("40% ABV");
   promptLines.push(`Include the following regulatory information clearly and legibly: ${regulatoryInfo.join(', ')}.`);
   promptLines.push(`Ensure all text is highly readable with adequate contrast.`);
 
@@ -349,6 +349,7 @@ async function main(arg, { qs, method }) {
     const promptIn = body.prompt ?? qs.prompt ?? "";
     const primaryIn = body.primaryColor ?? qs.primaryColor ?? '';
     const secondaryIn = body.secondaryColor ?? qs.secondaryColor ?? '';
+    const includeHexes = body.includeHexes ?? qs.includeHexes ?? '';
 
     const primaryHex = normalizeHex(primaryIn);
     const secondaryHex = normalizeHex(secondaryIn);
@@ -377,6 +378,7 @@ async function main(arg, { qs, method }) {
       hasPrompt: Boolean(promptIn),
       hasTitle: Boolean(titleIn),
       hasSubtitle: Boolean(subtitleIn),
+      includeHexes: includeHexes,
       primaryHex,
       secondaryHex,
       logoDataUrl,
@@ -406,7 +408,8 @@ async function main(arg, { qs, method }) {
       subtitleIn,
       primaryHex,
       secondaryHex,
-      templateColour: aiLabelTemplateColour
+      templateColour: aiLabelTemplateColour,
+      includeHexes
     });
     
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
