@@ -435,7 +435,7 @@ async function main(arg, { qs, method }) {
     const aiLabelTemplateColour = process.env.AI_LABEL_TEMPLATE_COLOUR || 'black';
 
     const templateUrl = bottleName && designSide
-      ? `https://barrel-n-bond.s3.eu-west-2.amazonaws.com/templates/2mm_trim_bleed/${bottleName.toLowerCase()}/${aiLabelTemplateColour}/${designSide}.png`
+      ? `https://spirits-studio.s3.eu-west-2.amazonaws.com/templates/2mm_trim_bleed/${bottleName.toLowerCase()}/${aiLabelTemplateColour}/${designSide}.png`
       : '';
 
     console.log('create-ai-label incoming:', {
