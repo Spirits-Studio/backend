@@ -1,15 +1,15 @@
-functionsDirectory = "/Users/marcus/Documents/code/barrel_n_bond/barrel_n_bond_backend/netlify/functions"
+functionsDirectory = "/Users/marcus/Documents/code/spirits-studio/backend/netlify/functions"
 functionsDirectoryOrigin = "config-v1"
 plugins = []
 headers = []
 redirects = []
 
 [build]
-publish = "/Users/marcus/Documents/code/barrel_n_bond/barrel_n_bond_backend"
+publish = "/Users/marcus/Documents/code/spirits-studio/backend"
 publishOrigin = "default"
 commandOrigin = "config"
 command = "npm install"
-functions = "/Users/marcus/Documents/code/barrel_n_bond/barrel_n_bond_backend/netlify/functions"
+functions = "/Users/marcus/Documents/code/spirits-studio/backend/netlify/functions"
 
 [build.environment]
 

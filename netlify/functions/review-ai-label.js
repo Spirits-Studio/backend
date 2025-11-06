@@ -535,7 +535,7 @@ async function main(arg, { qs, method }) {
       }
 
       // Template URL derived from bottle & side
-      const templateUrl = `https://barrel-n-bond.s3.eu-west-2.amazonaws.com/templates/${bottleName.toLowerCase()}/${designSide}.png`;
+      const templateUrl = `https://spirits-studio.s3.eu-west-2.amazonaws.com/templates/${bottleName.toLowerCase()}/${designSide}.png`;
 
       const finalPrompt = buildRevisionPrompt(alcoholName, dims, critique, musts, designSide, primaryHex, secondaryHex);
       console.log(`[review] ${designSide} prompt:`, finalPrompt.replace(/\n/g, ' | '));

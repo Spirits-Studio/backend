@@ -2,7 +2,7 @@ import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 
-const DEFAULT_BUCKET = "barrel-n-bond";
+const DEFAULT_BUCKET = "spirits-studio";
 const DEFAULT_REGION = "eu-west-2";
 
 const labelDimensions = {
