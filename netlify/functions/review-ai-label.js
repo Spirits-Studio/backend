@@ -1,6 +1,7 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const debugImages = [];
 let debugOn = false; // toggled per-request inside main()
@@ -208,6 +209,61 @@ async function composeLabel(croppedBuffer, widthMm, heightMm, bgHex, dpi = 300) 
   .toBuffer();
 
   return composite;
+}
+
+// --- S3 upload helpers (mirrors create-front-ai-label) ---
+const DEFAULT_BUCKET = "spirits-studio";
+const DEFAULT_REGION = "eu-west-2";
+const regionParam =
+  process.env.S3_REGION ||
+  process.env.AWS_REGION ||
+  process.env.AWS_DEFAULT_REGION ||
+  DEFAULT_REGION;
+
+function resolveS3Credentials() {
+  const accessKeyId = process.env.BNB_AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.BNB_AWS_SECRET_ACCESS_KEY;
+  if (!accessKeyId || !secretAccessKey) return undefined;
+  const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
+  return sessionToken
+    ? { accessKeyId, secretAccessKey, sessionToken }
+    : { accessKeyId, secretAccessKey };
+}
+
+const s3Client = new S3Client({
+  region: regionParam,
+  credentials: resolveS3Credentials()
+});
+
+const sanitizeId = (v) => String(v || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+const mimeToExt = (mime) => {
+  const m = (mime || "").toLowerCase();
+  if (m.includes("png")) return "png";
+  if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("gif")) return "gif";
+  return "bin";
+};
+
+async function uploadBufferToS3({ buffer, contentType, key, metadata = {} }) {
+  const Bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
+  await s3Client.send(new PutObjectCommand({
+    Bucket,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType || "application/octet-stream",
+    Metadata: metadata
+  }));
+  return `https://${Bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
+}
+
+function parseDataUrlToBuffer(dataUrl) {
+  const m = /^data:(.*?);base64,(.*)$/i.exec(String(dataUrl || ""));
+  if (!m) return { buffer: null, mimeType: "" };
+  const mimeType = m[1] || "image/png";
+  const b64 = m[2] || "";
+  const buffer = Buffer.from(b64, "base64");
+  return { buffer, mimeType };
 }
 
 
@@ -499,6 +555,9 @@ async function main(arg, { qs, method }) {
       return { statusCode: 400, body: JSON.stringify({ message: "Critique (revision notes) is required" }) };
     }
 
+    const sIdSafe = sanitizeId(sessionId) || String(Date.now());
+    const bottleSafe = sanitizeId(bottleName.toLowerCase() || "unknown");
+
     const apiKey = getGeminiKey();
     if (!apiKey) {
       console.error("Gemini API key is missing (set GOOGLE_API_KEY or GEMINI_API_KEY).");
@@ -512,6 +571,8 @@ async function main(arg, { qs, method }) {
 
     const resultImages = { front: null, back: null };
     const sideMessages = {};
+    const uploadsBySide = { front: [], back: [] };
+    const sidePrimaryUrls = { front: "", back: "" };
 
     for (const sideRaw of revisionSides) {
       const designSide = normaliseSide(sideRaw);
@@ -596,7 +657,46 @@ async function main(arg, { qs, method }) {
       const firstImage = images[0] || null;
       resultImages[designSide] = firstImage;
       sideMessages[designSide] = modelMessage;
+
+      // Upload to S3 with same structure as create-front-ai-label
+      try {
+        const basePrefix = `sessions/${sIdSafe}/${bottleSafe}/review/${designSide}`;
+        const uploaded = [];
+        for (let i = 0; i < images.length; i++) {
+          const { buffer, mimeType } = parseDataUrlToBuffer(images[i]);
+          if (!buffer || !buffer.length) continue;
+          const ext = mimeToExt(mimeType);
+          const index = images.length > 1 ? `_${String(i + 1).padStart(2, "0")}` : "";
+          const key = `${basePrefix}_label${index}.${ext}`;
+          const url = await uploadBufferToS3({
+            buffer,
+            contentType: mimeType || "image/png",
+            key,
+            metadata: {
+              "bnb-stage": "review",
+              "bnb-design-side": designSide,
+              "bnb-bottle": bottleSafe,
+              "bnb-source": "ai-review",
+              "bnb-session-id": sIdSafe
+            }
+          });
+          uploaded.push({ key, url, contentType: mimeType });
+        }
+        uploadsBySide[designSide] = uploaded;
+        sidePrimaryUrls[designSide] = uploaded[0]?.url || "";
+      } catch (uploadErr) {
+        console.error(`[review] S3 upload failed (${designSide}):`, uploadErr?.message || uploadErr);
+        return {
+          statusCode: 502,
+          body: JSON.stringify({ message: "S3 upload failed", error: String(uploadErr?.message || uploadErr) })
+        };
+      }
     }
+
+    const allUploads = [
+      ...uploadsBySide.front,
+      ...uploadsBySide.back,
+    ];
 
     return {
       statusCode: 200,
@@ -609,11 +709,14 @@ async function main(arg, { qs, method }) {
         height_mm: labelDimensions[bottleName]?.front?.height,
         images: resultImages,
         modelMessages: sideMessages,
+        s3Uploads: allUploads,
+        frontS3Url: sidePrimaryUrls.front,
+        backS3Url: sidePrimaryUrls.back,
         ...(debugOn ? { debugImages } : {}),
       }),
     };
   } catch (err) {
-    console.error("create-ai-label unhandled error:", err);
+    console.error("review-ai-label unhandled error:", err);
     return { statusCode: 500, body: String(err?.message || err), debugImages };
   }
 }
