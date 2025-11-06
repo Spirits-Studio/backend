@@ -1,6 +1,7 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { GoogleGenAI } from "@google/genai";
 import sharp from "sharp";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const debugImages = [];
 let debugOn = false; // toggled per-request inside main()
@@ -219,6 +220,60 @@ const labelDimensions = {
   Manila: { width: 135, height: 50 },
   Origin: { width: 115, height: 45 },
 };
+
+const DEFAULT_BUCKET = "spirits-studio";
+const DEFAULT_REGION = "eu-west-2";
+const regionParam =
+  process.env.S3_REGION ||
+  process.env.AWS_REGION ||
+  process.env.AWS_DEFAULT_REGION ||
+  DEFAULT_REGION;
+
+function resolveS3Credentials() {
+  const accessKeyId = process.env.BNB_AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.BNB_AWS_SECRET_ACCESS_KEY;
+  if (!accessKeyId || !secretAccessKey) return undefined;
+  const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
+  return sessionToken
+    ? { accessKeyId, secretAccessKey, sessionToken }
+    : { accessKeyId, secretAccessKey };
+}
+
+const s3Client = new S3Client({
+  region: regionParam,
+  credentials: resolveS3Credentials()
+});
+
+const sanitizeId = (v) => String(v || "").trim().replace(/[^a-zA-Z0-9_-]/g, "");
+const mimeToExt = (mime) => {
+  const m = (mime || "").toLowerCase();
+  if (m.includes("png")) return "png";
+  if (m.includes("jpeg") || m.includes("jpg")) return "jpg";
+  if (m.includes("webp")) return "webp";
+  if (m.includes("gif")) return "gif";
+  return "bin";
+};
+
+async function uploadBufferToS3({ buffer, contentType, key, metadata = {} }) {
+  const Bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
+  await s3Client.send(new PutObjectCommand({
+    Bucket,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType || "application/octet-stream",
+    Metadata: metadata
+  }));
+  return `https://${Bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
+}
+
+function parseDataUrlToBuffer(dataUrl) {
+  const m = /^data:(.*?);base64,(.*)$/i.exec(String(dataUrl || ""));
+  if (!m) return { buffer: null, mimeType: "" };
+  const mimeType = m[1] || "image/png";
+  const b64 = m[2] || "";
+  const buffer = Buffer.from(b64, "base64");
+  return { buffer, mimeType };
+}
 
 // --- Normalise bottle & side casing to match keys above ---
 function normaliseBottle(name = "") {
@@ -503,6 +558,35 @@ async function main(arg, { qs, method }) {
     }
     const firstImage = images[0] || '';
 
+    // Upload generated images to S3
+    const bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
+    const sIdSafe = sanitizeId(sessionId) || String(Date.now());
+    const bottleSafe = sanitizeId(bottleName.toLowerCase() || "unknown");
+    const basePrefix = `sessions/${sIdSafe}/${bottleSafe}/front`;
+
+    const uploaded = [];
+    for (let i = 0; i < images.length; i++) {
+      const { buffer, mimeType } = parseDataUrlToBuffer(images[i]);
+      if (!buffer || !buffer.length) continue;
+      const ext = mimeToExt(mimeType);
+      const index = images.length > 1 ? `_${String(i + 1).padStart(2, "0")}` : "";
+      const key = `${basePrefix}_label${index}.${ext}`;
+      const url = await uploadBufferToS3({
+        buffer,
+        contentType: mimeType || "image/png",
+        key,
+        metadata: {
+          "bnb-stage": "session",
+          "bnb-design-side": "front",
+          "bnb-bottle": bottleSafe,
+          "bnb-source": "ai-generate",
+          "bnb-session-id": sIdSafe
+        }
+      });
+      uploaded.push({ key, url, contentType: mimeType });
+    }
+    const frontS3Url = uploaded[0]?.url || "";
+
     // // Old retry/processing path (kept for reference):
     // // - Trim white borders
     // // - Check aspect ratio
@@ -520,9 +604,13 @@ async function main(arg, { qs, method }) {
         designSide: 'front',
         width_mm: dims.width,
         height_mm: dims.height,
+        // base64 for preview
         images,
-        modelMessage,
         frontImage: firstImage,
+        // S3 results
+        s3Uploads: uploaded,
+        frontS3Url,
+        modelMessage,
         ...(debugOn ? { debugImages } : {}),
       }),
     };
