@@ -453,19 +453,7 @@ async function main(arg, { qs, method }) {
   try {    
     // Read incoming payload from Shopify App Proxy (qs) and JSON body
     const body = await readBody(arg);
-    // Debug toggle: /function?debug=1 or body.debug=true
-    const critique = body.critique ?? qs.critique ?? "";
-    const previousImage = body.previousImage ?? qs.previousImage ?? "";
-    const hasPreviousImage =
-      typeof previousImage === "string" && previousImage.startsWith("data:");
-    const previousImageInline = hasPreviousImage
-      ? dataUrlToInlineData(previousImage)
-      : null;
-    const qsDebug = qs?.debug;
-    debugOn = qsDebug === '1' || qsDebug === 'true' || body.debug === true;
-    // Reset collector per-invocation
-    debugImages.length = 0;
-
+    
     // Accept both JSON keys and qs aliases
     const alcoholName = body.alcoholName ?? qs.alcoholName ?? "";
     const rawBottle = body.bottleName ?? qs.bottleName ?? "";
@@ -476,9 +464,22 @@ async function main(arg, { qs, method }) {
     const primaryIn = body.primaryColor ?? qs.primaryColor ?? '';
     const secondaryIn = body.secondaryColor ?? qs.secondaryColor ?? '';
     const includeHexes = body.includeHexes ?? qs.includeHexes ?? '';
-
+    
     const primaryHex = normalizeHex(primaryIn);
     const secondaryHex = normalizeHex(secondaryIn);
+    
+    const critique = body.critique ?? qs.critique ?? "";
+    const previousImage = body.previousImage ?? qs.previousImage ?? "";
+    const hasPreviousImage =
+      typeof previousImage === "string" && previousImage.startsWith("data:");
+    const previousImageInline = hasPreviousImage
+      ? dataUrlToInlineData(previousImage)
+      : null;
+    const qsDebug = qs?.debug;
+    debugOn = qsDebug === '1' || qsDebug === 'true' || body.debug === true;
+    
+    // Reset collector per-invocation
+    debugImages.length = 0;
 
     // Optional logo as data URL (if client sends it)
     const logoDataUrl = pickDataUrl(body, ['logoDataUrl', 'logo']) || pickDataUrl(qs, ['logoDataUrl']);
@@ -526,8 +527,8 @@ async function main(arg, { qs, method }) {
         body: JSON.stringify({ message: "Label Dimensions not identified", bottleName }),
       };
     }
-    if (!promptIn) {
-      console.error("Prompt not provided");
+    if (!promptIn && !critique) {
+      console.error("Prompt/Critique not provided");
       return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
     }
 
