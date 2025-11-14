@@ -290,7 +290,7 @@ function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, s
 
   promptLines.push(`You are designing the FRONT label for a bottle of ${alcoholName} (${orientation}).`);
   promptLines.push(`Use the provided TEMPLATE as the exact canvas. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio.`);
-  promptLines.push(`Fill the template completely (no borders). Corners must be square.`);
+  promptLines.push(`Fill the template completely (no borders), and ensure that the corners are square.`);
 
   if (promptIn) promptLines.push(`Creative direction: ${promptIn}`);
   if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
@@ -328,16 +328,10 @@ function buildRevisePrompt({
   const regulatoryInfo = [];
 
   promptLines.push(`You are updating the existing FRONT label for a bottle of ${alcoholName} (${orientation}).`);
-  promptLines.push(`You are given the current label design as an image. Start from that design and MODIFY it according to the revision notes, rather than creating a totally new concept.`);
+  promptLines.push(`You are given the current label design as an image. Start from that design and MODIFY it according to the revision notes, rather than creating a totally new concept. DO NOT change any elements that are not mentioned in the revision notes.`);
   promptLines.push(`Keep the overall layout, style, and key visual identity unless the revision notes explicitly say otherwise.`);
-  promptLines.push(`Use the provided TEMPLATE as the exact canvas. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio.`);
-  promptLines.push(`Fill the template completely (no borders). Corners must be square.`);
 
-  if (promptIn) promptLines.push(`Original creative direction: ${promptIn}`);
   if (critique) promptLines.push(`Revision notes (these are the most important instructions): ${critique}`);
-  if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
-  if (titleIn) promptLines.push(`Bottle title text: "${titleIn}".`);
-  subtitleIn ? promptLines.push(`Bottle subtitle text: "${subtitleIn}".`) : promptLines.push(`No subtitle text is needed.`);
   if (includeHexes) {
     promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary).`);
   }
