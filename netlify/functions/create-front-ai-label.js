@@ -289,8 +289,9 @@ function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, s
   const regulatoryInfo = [];
 
   promptLines.push(`You are designing the FRONT label for a bottle of ${alcoholName} (${orientation}).`);
-  promptLines.push(`Use the provided TEMPLATE as the exact canvas. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio.`);
-  promptLines.push(`Fill the template completely (no borders), and ensure that the corners are square.`);
+  promptLines.push(`The final label must be ${orientation}, with width of ${dims.width}mm and height of ${dims.height}mm.`);
+  // promptLines.push(`Use the provided TEMPLATE as the exact canvas. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio.`);
+  promptLines.push(`Fill the canvas completely completely (no borders), and ensure that the corners are square.`);
 
   if (promptIn) promptLines.push(`Creative direction: ${promptIn}`);
   if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
