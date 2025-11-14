@@ -280,7 +280,7 @@ function normaliseBottle(name = "") {
   if (!name) return "";
   return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 }
-function buildPrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, templateColour, includeHexes }) {
+function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, templateColour, includeHexes }) {
   const orientation =
     dims.width === dims.height ? 'square' :
     dims.width >= dims.height ? 'landscape' : 'portrait';
@@ -307,32 +307,96 @@ function buildPrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitl
   return promptLines.join('\n');
 }
 
+function buildRevisePrompt({
+  alcoholName,
+  dims,
+  promptIn,
+  logoInline,
+  titleIn,
+  subtitleIn,
+  primaryHex,
+  secondaryHex,
+  templateColour,
+  includeHexes,
+  critique,
+}) {
+  const orientation =
+    dims.width === dims.height ? 'square' :
+    dims.width >= dims.height ? 'landscape' : 'portrait';
+
+  const promptLines = [];
+  const regulatoryInfo = [];
+
+  promptLines.push(`You are updating the existing FRONT label for a bottle of ${alcoholName} (${orientation}).`);
+  promptLines.push(`You are given the current label design as an image. Start from that design and MODIFY it according to the revision notes, rather than creating a totally new concept.`);
+  promptLines.push(`Keep the overall layout, style, and key visual identity unless the revision notes explicitly say otherwise.`);
+  promptLines.push(`Use the provided TEMPLATE as the exact canvas. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio.`);
+  promptLines.push(`Fill the template completely (no borders). Corners must be square.`);
+
+  if (promptIn) promptLines.push(`Original creative direction: ${promptIn}`);
+  if (critique) promptLines.push(`Revision notes (these are the most important instructions): ${critique}`);
+  if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
+  if (titleIn) promptLines.push(`Bottle title text: "${titleIn}".`);
+  subtitleIn ? promptLines.push(`Bottle subtitle text: "${subtitleIn}".`) : promptLines.push(`No subtitle text is needed.`);
+  if (includeHexes) {
+    promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary).`);
+  }
+
+  regulatoryInfo.push("40% ABV");
+  promptLines.push(`Ensure the regulatory information remains clearly readable: ${regulatoryInfo.join(', ')}.`);
+  promptLines.push(`Make sure all text is highly readable with adequate contrast, and avoid adding extra text that is not requested in the revision notes.`);
+
+  return promptLines.join('\n');
+}
+
+
 
 // Build Gemini contents (parts array) in one place for legibility
-async function buildContents({ templateUrl, logoInline, finalPrompt, templateColour }) {
+async function buildContents({
+  templateUrl,
+  logoInline,
+  finalPrompt,
+  templateColour,
+  previousInline,
+  isRevision,
+}) {
   const parts = [];
+
+  // If this is a revision, start by giving the existing label image
+  if (isRevision && previousInline) {
+    parts.push({
+      text: "EXISTING LABEL — This is the current label design. Start from this and update it according to the revision notes, instead of creating a totally new design.",
+    });
+    parts.push({ inlineData: previousInline });
+  }
 
   // Template canvas
   if (templateUrl) {
     try {
       const templateInline = await fetchTemplateInlineData(templateUrl);
       if (templateInline) {
-        parts.push({ text: `TEMPLATE CANVAS — Use this as the exact base. Remove the ${templateColour} background colour, and its size, pixel dimensions, and aspect ratio. Fill edge-to-edge with no borders; corners must be square.` });
+        parts.push({
+          text: `TEMPLATE CANVAS — Use this as the exact base. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio. Fill edge-to-edge with no borders; corners must be square.`,
+        });
         parts.push({ inlineData: templateInline });
       }
     } catch (e) {
-      console.warn("buildContents: template fetch failed:", e?.message || e);
+      console.error('fetchTemplateInlineData error:', e?.message || e);
     }
   }
 
   // Logo (front only, when provided)
   if (logoInline) {
-    parts.push({ text: "LOGO — Include this logo exactly as provided. Do not alter its colours or proportions." });
+    parts.push({
+      text: "LOGO — Include this logo exactly as provided. Do not alter its colours or proportions.",
+    });
     parts.push({ inlineData: logoInline });
   }
 
   // Final textual brief (kept as a single block for readability)
-  parts.push({ text: `${finalPrompt}\n\nRe-state constraints: Use the template as the base. Preserve its pixel dimensions. Remove the ${templateColour} background colour. No white borders; square corners.` });
+  parts.push({
+    text: `${finalPrompt}\n\nRe-state constraints: Use the template as the base. Preserve its pixel dimensions. Remove the ${templateColour} background colour. No white borders; square corners.`,
+  });
 
   return [{ role: "user", parts }];
 }
@@ -390,6 +454,13 @@ async function main(arg, { qs, method }) {
     // Read incoming payload from Shopify App Proxy (qs) and JSON body
     const body = await readBody(arg);
     // Debug toggle: /function?debug=1 or body.debug=true
+    const critique = body.critique ?? qs.critique ?? "";
+    const previousImage = body.previousImage ?? qs.previousImage ?? "";
+    const hasPreviousImage =
+      typeof previousImage === "string" && previousImage.startsWith("data:");
+    const previousImageInline = hasPreviousImage
+      ? dataUrlToInlineData(previousImage)
+      : null;
     const qsDebug = qs?.debug;
     debugOn = qsDebug === '1' || qsDebug === 'true' || body.debug === true;
     // Reset collector per-invocation
@@ -423,24 +494,30 @@ async function main(arg, { qs, method }) {
       ? `https://spirits-studio.s3.eu-west-2.amazonaws.com/templates/2mm_trim_bleed/${bottleName.toLowerCase()}/${aiLabelTemplateColour}/front.png`
       : '';
 
-    console.log('create-front-ai-label incoming:', {
-      method,
-      alcoholName,
-      bottleName,
-      designSide: 'front',
-      width: dims?.width,
-      height: dims?.height,
-      hasPrompt: Boolean(promptIn),
-      hasTitle: Boolean(titleIn),
-      hasSubtitle: Boolean(subtitleIn),
-      includeHexes: includeHexes,
-      primaryHex,
-      secondaryHex,
-      logoDataUrl,
-      logoInline: Boolean(logoInline),
-      sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
-      usingTemplate: Boolean(templateUrl)
-    });
+        console.log('create-front-ai-label incoming:', {
+          method,
+          alcoholName,
+          bottleName,
+          designSide: 'front',
+          width: dims?.width,
+          height: dims?.height,
+          hasPrompt: Boolean(promptIn),
+          hasTitle: Boolean(titleIn),
+          hasSubtitle: Boolean(subtitleIn),
+          includeHexes: includeHexes,
+          primaryHex,
+          secondaryHex,
+          logoDataUrl,
+          logoInline: Boolean(logoInline),
+          sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
+          usingTemplate: Boolean(templateUrl),
+          hasCritique: Boolean(critique),
+          hasPreviousImage,
+          previousImage,
+          critiquePreview: critique ? String(critique).slice(0, 160) : "",
+          critique,
+          debug: false,
+        });
 
     if (!dims) {
       console.error("Label Dimensions not identified:", { bottleName });
@@ -454,18 +531,34 @@ async function main(arg, { qs, method }) {
       return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
     }
 
-    const finalPrompt = buildPrompt({
-      alcoholName,
-      dims,
-      promptIn,
-      logoInline,
-      titleIn,
-      subtitleIn,
-      primaryHex,
-      secondaryHex,
-      templateColour: aiLabelTemplateColour,
-      includeHexes
-    });
+        const isRevision = Boolean(critique && hasPreviousImage);
+
+    const finalPrompt = isRevision
+      ? buildRevisePrompt({
+          alcoholName,
+          dims,
+          promptIn,
+          logoInline,
+          titleIn,
+          subtitleIn,
+          primaryHex,
+          secondaryHex,
+          templateColour: aiLabelTemplateColour,
+          includeHexes,
+          critique,
+        })
+      : buildCreatePrompt({
+          alcoholName,
+          dims,
+          promptIn,
+          logoInline,
+          titleIn,
+          subtitleIn,
+          primaryHex,
+          secondaryHex,
+          templateColour: aiLabelTemplateColour,
+          includeHexes,
+        });
     
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
     console.log("Template URL:", templateUrl || '(none)');
@@ -484,7 +577,9 @@ async function main(arg, { qs, method }) {
       templateUrl,
       logoInline,
       finalPrompt,
-      templateColour: aiLabelTemplateColour
+      templateColour: aiLabelTemplateColour,
+      previousInline: previousImageInline,
+      isRevision,
     });
 
     // --- Simple single-shot generation for dev: return whatever the AI creates ---
