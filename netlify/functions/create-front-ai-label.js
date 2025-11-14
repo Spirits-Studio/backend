@@ -508,7 +508,6 @@ async function main(arg, { qs, method }) {
           usingTemplate: Boolean(templateUrl),
           hasCritique: Boolean(critique),
           hasPreviousImage,
-          previousImage,
           critiquePreview: critique ? String(critique).slice(0, 160) : "",
           critique,
           debug: false,
