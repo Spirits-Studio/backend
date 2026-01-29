@@ -337,6 +337,10 @@ async function buildContents({
 }) {
   const parts = [];
 
+  if(finalPrompt) {
+    parts.push({ text: finalPrompt });
+  }
+
   // If this is a revision, start by giving the existing label image
   if (isRevision && previousInline) {
     parts.push({
