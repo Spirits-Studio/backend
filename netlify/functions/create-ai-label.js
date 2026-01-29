@@ -485,7 +485,7 @@ async function main(arg, { qs, method }) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const modelId = "gemini-2.5-flash-image";
+    const modelId = "gemini-3-pro-image-preview";
 
     // Prepare contents in one place for better legibility
     let genContents = await buildContents({

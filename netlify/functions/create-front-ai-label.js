@@ -91,22 +91,6 @@ function dataUrlToInlineData(dataUrl) {
   } catch { return null; }
 }
 
-// Fetch a template image (by URL) and convert it to Gemini inlineData
-async function fetchTemplateInlineData(url) {
-  if (!url) return null;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const ct = res.headers.get('content-type') || 'image/png';
-    const ab = await res.arrayBuffer();
-    const b64 = Buffer.from(ab).toString('base64');
-    return { mimeType: ct, data: b64 };
-  } catch (e) {
-    console.error('fetchTemplateInlineData error:', e?.message || e);
-    return null;
-  }
-}
-
 async function trimWhiteBorder(input, opts = {}) {
   // Support both number and object forms: trimWhiteBorder(buf, 15) or trimWhiteBorder(buf, { threshold: 15 })
   const threshold = typeof opts === 'number' ? opts : (opts && typeof opts.threshold === 'number' ? opts.threshold : 12);
@@ -280,7 +264,7 @@ function normaliseBottle(name = "") {
   if (!name) return "";
   return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 }
-function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, templateColour, includeHexes }) {
+function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, includeHexes }) {
   const orientation =
     dims.width === dims.height ? 'square' :
     dims.width >= dims.height ? 'landscape' : 'portrait';
@@ -290,7 +274,6 @@ function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, s
 
   promptLines.push(`You are designing the FRONT label for a bottle of ${alcoholName} (${orientation}).`);
   promptLines.push(`The final label must be ${orientation}, with width of ${dims.width}mm and height of ${dims.height}mm.`);
-  // promptLines.push(`Use the provided TEMPLATE as the exact canvas. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio.`);
   promptLines.push(`Fill the canvas completely completely (no borders, no transparent elements), and ensure that the corners are square.`);
 
   if (promptIn) promptLines.push(`Creative direction: ${promptIn}`);
@@ -317,7 +300,6 @@ function buildRevisePrompt({
   subtitleIn,
   primaryHex,
   secondaryHex,
-  templateColour,
   includeHexes,
   critique,
 }) {
@@ -348,10 +330,8 @@ function buildRevisePrompt({
 
 // Build Gemini contents (parts array) in one place for legibility
 async function buildContents({
-  templateUrl,
   logoInline,
   finalPrompt,
-  templateColour,
   previousInline,
   isRevision,
 }) {
@@ -365,21 +345,6 @@ async function buildContents({
     parts.push({ inlineData: previousInline });
   }
 
-  // Template canvas
-  if (templateUrl) {
-    try {
-      const templateInline = await fetchTemplateInlineData(templateUrl);
-      if (templateInline) {
-        parts.push({
-          text: `TEMPLATE CANVAS — Use this as the exact base. Remove the ${templateColour} background colour, and preserve its size, pixel dimensions, and aspect ratio. Fill edge-to-edge with no borders; corners must be square.`,
-        });
-        parts.push({ inlineData: templateInline });
-      }
-    } catch (e) {
-      console.error('fetchTemplateInlineData error:', e?.message || e);
-    }
-  }
-
   // Logo (front only, when provided)
   if (logoInline) {
     parts.push({
@@ -387,11 +352,6 @@ async function buildContents({
     });
     parts.push({ inlineData: logoInline });
   }
-
-  // Final textual brief (kept as a single block for readability)
-  parts.push({
-    text: `${finalPrompt}\n\nRe-state constraints: Use the template as the base. Preserve its pixel dimensions. Remove the ${templateColour} background colour. No white borders; square corners.`,
-  });
 
   return [{ role: "user", parts }];
 }
@@ -483,13 +443,6 @@ async function main(arg, { qs, method }) {
     const bottleName = normaliseBottle(rawBottle);
     const dims = labelDimensions[bottleName] || null;
 
-    // Build template URL from bottle/side convention
-    const aiLabelTemplateColour = process.env.AI_LABEL_TEMPLATE_COLOUR || 'black';
-
-    const templateUrl = bottleName
-      ? `https://spirits-studio.s3.eu-west-2.amazonaws.com/templates/2mm_trim_bleed/${bottleName.toLowerCase()}/${aiLabelTemplateColour}/front.png`
-      : '';
-
         console.log('create-front-ai-label incoming:', {
           method,
           alcoholName,
@@ -506,7 +459,6 @@ async function main(arg, { qs, method }) {
           logoDataUrl,
           logoInline: Boolean(logoInline),
           sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
-          usingTemplate: Boolean(templateUrl),
           hasCritique: Boolean(critique),
           hasPreviousImage,
           critiquePreview: critique ? String(critique).slice(0, 160) : "",
@@ -538,7 +490,6 @@ async function main(arg, { qs, method }) {
           subtitleIn,
           primaryHex,
           secondaryHex,
-          templateColour: aiLabelTemplateColour,
           includeHexes,
           critique,
         })
@@ -551,12 +502,10 @@ async function main(arg, { qs, method }) {
           subtitleIn,
           primaryHex,
           secondaryHex,
-          templateColour: aiLabelTemplateColour,
           includeHexes,
         });
     
     console.log("Final prompt:", finalPrompt.replace(/\n/g, ' | '));
-    console.log("Template URL:", templateUrl || '(none)');
         
     const apiKey = getGeminiKey();
     if (!apiKey) {
@@ -565,15 +514,12 @@ async function main(arg, { qs, method }) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    // const modelId = "gemini-2.5-flash-image";
     const modelId = "gemini-3-pro-image-preview";
 
     // Prepare contents in one place for better legibility
     let genContents = await buildContents({
-      templateUrl,
       logoInline,
       finalPrompt,
-      templateColour: aiLabelTemplateColour,
       previousInline: previousImageInline,
       isRevision,
     });
