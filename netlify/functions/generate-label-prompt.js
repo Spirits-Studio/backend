@@ -77,19 +77,17 @@ export default withShopifyProxy(
 
       const ai = new GoogleGenAI({ apiKey });
       const userPrompt = [
-        "Create a concise, production-grade label prompt.",
-        "Use the fields below; omit any that are empty.",
+        "You are an expert prompt egineer who specialises in working with Gemini Nano Banana.",
+        "Create a concise, production-grade image prompt using the fields below.",
         "Return only the final prompt sentence, no quotes, no labels.",
         "",
-        `Title: ${normalize(body.title)}`,
-        `Subtitle (liquid): ${normalize(body.subtitle)}`,
-        `Concept theme: ${normalize(body.theme)}`,
-        `Sub-theme: ${normalize(body.subTheme)}`,
-        `Main subject type: ${normalize(body.mainSubjectType)}`,
-        `Main subject: ${normalize(body.mainSubject)}`,
-        `Action: ${normalize(body.action)}`,
-        `Style family: ${normalize(body.styleFamily)}`,
-        `Palette vibe: ${normalize(body.paletteVibe)}`,
+        body.theme ? `Concept theme: ${normalize(body.theme)}` : '',
+        body.subTheme ? `Sub-theme: ${normalize(body.subTheme)}` : '',
+        body.mainSubjectType ? `Main subject type: ${normalize(body.mainSubjectType)}` : '',
+        body.mainSubject ? `Main subject: ${normalize(body.mainSubject)}` : '',
+        body.action ? `Action: ${normalize(body.action)}` : '',
+        body.styleFamily ? `Style family: ${normalize(body.styleFamily)}` : '',
+        body.paletteVibe ? `Palette vibe: ${normalize(body.paletteVibe)}`: '',
       ].join("\n");
 
       const result = await ai.models.generateContent({
