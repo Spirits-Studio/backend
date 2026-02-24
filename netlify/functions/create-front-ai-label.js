@@ -91,6 +91,22 @@ function dataUrlToInlineData(dataUrl) {
   } catch { return null; }
 }
 
+async function urlToInlineData(url) {
+  try {
+    const href = String(url || "").trim();
+    if (!/^https?:\/\//i.test(href)) return null;
+    const res = await fetch(href);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const mime = res.headers.get("content-type") || "image/png";
+    const ab = await res.arrayBuffer();
+    if (!ab || !ab.byteLength) return null;
+    return { mimeType: mime, data: Buffer.from(ab).toString("base64") };
+  } catch (error) {
+    console.warn("urlToInlineData failed:", error?.message || error);
+    return null;
+  }
+}
+
 async function trimWhiteBorder(input, opts = {}) {
   // Support both number and object forms: trimWhiteBorder(buf, 15) or trimWhiteBorder(buf, { threshold: 15 })
   const threshold = typeof opts === 'number' ? opts : (opts && typeof opts.threshold === 'number' ? opts.threshold : 12);
@@ -264,7 +280,7 @@ function normaliseBottle(name = "") {
   if (!name) return "";
   return name.charAt(0).toUpperCase() + name.slice(1).toLowerCase();
 }
-function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, subtitleIn, primaryHex, secondaryHex, includeHexes }) {
+function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, characterInline, titleIn, subtitleIn, primaryHex, secondaryHex, includeHexes }) {
   const orientation =
     dims.width === dims.height ? 'square' :
     dims.width >= dims.height ? 'landscape' : 'portrait';
@@ -278,6 +294,7 @@ function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, titleIn, s
 
   if (promptIn) promptLines.push(`Creative direction: ${promptIn}`);
   if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
+  if (characterInline) promptLines.push(`Include the provided CHARACTER/REFERENCE image in the composition and keep it recognisable.`);
   if (titleIn) promptLines.push(`Bottle title text: "${titleIn}".`);
   subtitleIn ? promptLines.push(`Bottle subtitle text: "${subtitleIn}".`) : promptLines.push(`No subtitle text is needed.`);
   if (includeHexes) {
@@ -296,6 +313,7 @@ function buildRevisePrompt({
   dims,
   promptIn,
   logoInline,
+  characterInline,
   titleIn,
   subtitleIn,
   primaryHex,
@@ -315,6 +333,8 @@ function buildRevisePrompt({
   promptLines.push(`Keep the overall layout, style, and key visual identity unless the revision notes explicitly say otherwise.`);
 
   if (critique) promptLines.push(`Revision notes (these are the most important instructions): ${critique}`);
+  if (logoInline) promptLines.push(`If a LOGO is provided, keep it consistent and unaltered.`);
+  if (characterInline) promptLines.push(`If a CHARACTER/REFERENCE image is provided, preserve recognisable features while applying the revision notes.`);
   if (includeHexes) {
     promptLines.push(`Palette: ${primaryHex || '—'} (primary), ${secondaryHex || '—'} (secondary).`);
   }
@@ -331,6 +351,7 @@ function buildRevisePrompt({
 // Build Gemini contents (parts array) in one place for legibility
 async function buildContents({
   logoInline,
+  characterInline,
   finalPrompt,
   previousInline,
   isRevision,
@@ -355,6 +376,13 @@ async function buildContents({
       text: "LOGO — Include this logo exactly as provided. Do not alter its colours or proportions.",
     });
     parts.push({ inlineData: logoInline });
+  }
+
+  if (characterInline) {
+    parts.push({
+      text: "CHARACTER/REFERENCE IMAGE — Incorporate this image in the label and keep key traits recognisable.",
+    });
+    parts.push({ inlineData: characterInline });
   }
 
   return [{ role: "user", parts }];
@@ -429,11 +457,14 @@ async function main(arg, { qs, method }) {
     
     const critique = body.critique ?? qs.critique ?? "";
     const previousImage = body.previousImage ?? qs.previousImage ?? "";
-    const hasPreviousImage =
+    const previousImageIsDataUrl =
       typeof previousImage === "string" && previousImage.startsWith("data:");
-    const previousImageInline = hasPreviousImage
+    const previousImageIsUrl =
+      typeof previousImage === "string" && /^https?:\/\//i.test(previousImage);
+    const previousImageInline = previousImageIsDataUrl
       ? dataUrlToInlineData(previousImage)
-      : null;
+      : (previousImageIsUrl ? await urlToInlineData(previousImage) : null);
+    const hasPreviousImage = Boolean(previousImageInline);
     const qsDebug = qs?.debug;
     debugOn = qsDebug === '1' || qsDebug === 'true' || body.debug === true;
     
@@ -443,6 +474,8 @@ async function main(arg, { qs, method }) {
     // Optional logo as data URL (if client sends it)
     const logoDataUrl = pickDataUrl(body, ['logoDataUrl', 'logo']) || pickDataUrl(qs, ['logoDataUrl']);
     const logoInline = logoDataUrl ? dataUrlToInlineData(logoDataUrl) : null;
+    const characterDataUrl = pickDataUrl(body, ['characterDataUrl', 'character']) || pickDataUrl(qs, ['characterDataUrl']);
+    const characterInline = characterDataUrl ? dataUrlToInlineData(characterDataUrl) : null;
 
     const bottleName = normaliseBottle(rawBottle);
     const dims = labelDimensions[bottleName] || null;
@@ -462,6 +495,8 @@ async function main(arg, { qs, method }) {
           secondaryHex,
           logoDataUrl,
           logoInline: Boolean(logoInline),
+          characterDataUrl,
+          characterInline: Boolean(characterInline),
           sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
           hasCritique: Boolean(critique),
           hasPreviousImage,
@@ -481,6 +516,14 @@ async function main(arg, { qs, method }) {
       console.error("Prompt/Critique not provided");
       return { statusCode: 400, body: JSON.stringify({ message: "Prompt not provided" }) };
     }
+    if (critique && previousImage && !hasPreviousImage) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({
+          message: "previousImage must be a valid data URL or publicly fetchable HTTP(S) URL"
+        }),
+      };
+    }
 
         const isRevision = Boolean(critique && hasPreviousImage);
 
@@ -490,6 +533,7 @@ async function main(arg, { qs, method }) {
           dims,
           promptIn,
           logoInline,
+          characterInline,
           titleIn,
           subtitleIn,
           primaryHex,
@@ -502,6 +546,7 @@ async function main(arg, { qs, method }) {
           dims,
           promptIn,
           logoInline,
+          characterInline,
           titleIn,
           subtitleIn,
           primaryHex,
@@ -523,6 +568,7 @@ async function main(arg, { qs, method }) {
     // Prepare contents in one place for better legibility
     let genContents = await buildContents({
       logoInline,
+      characterInline,
       finalPrompt,
       previousInline: previousImageInline,
       isRevision,
