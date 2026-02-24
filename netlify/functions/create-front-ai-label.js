@@ -290,7 +290,7 @@ function buildCreatePrompt({ alcoholName, dims, promptIn, logoInline, characterI
 
   promptLines.push(`You are designing the FRONT label for a bottle of ${alcoholName} (${orientation}).`);
   promptLines.push(`The final label must be ${orientation}, with width of ${dims.width}mm and height of ${dims.height}mm.`);
-  promptLines.push(`Fill the canvas completely completely (no borders, no transparent elements), and ensure that the corners are square.`);
+  promptLines.push(`Fill the canvas completely completely (no borders, no transparent elements), and ensure that the corners are square. Do not include any rulers or measurements - this is the final print file with no bleed.`);
 
   if (promptIn) promptLines.push(`Creative direction: ${promptIn}`);
   if (logoInline) promptLines.push(`Include the provided LOGO exactly as given (do not alter).`);
