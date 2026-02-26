@@ -1,5 +1,5 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { findOneBy, createOne, updateOne } from "../../src/lib/airtable.js";
+import { findOneBy, createOne, updateOne, getOne } from "../../src/lib/airtable.js";
 
 const send = (status, obj) =>
   new Response(JSON.stringify(obj), {
@@ -49,6 +49,49 @@ export default withShopifyProxy(
       const firstName = pick(qs, body, "first_name", "firstName");
       const lastName = pick(qs, body, "last_name", "lastName");
       const phone = pick(qs, body, "phone", "customer_phone", "customerPhone");
+      const airtableId = pick(qs, body, "airtable_id", "airtableId");
+
+      if (method === "PATCH") {
+        if (!airtableId) {
+          return send(400, {
+            ok: false,
+            error: "missing_airtable_id",
+            message: "airtableId is required for PATCH updates.",
+          });
+        }
+
+        const existing = await getOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, airtableId);
+        if (!existing) {
+          return send(404, {
+            ok: false,
+            error: "not_found",
+            message: "Customer record not found for provided airtableId.",
+          });
+        }
+
+        const updates = {};
+        if (customerId) updates["Shopify ID"] = customerId;
+        if (email) updates.Email = email;
+        if (firstName) updates["First Name"] = firstName;
+        if (lastName) updates["Last Name"] = lastName;
+        if (phone) updates["Phone"] = phone;
+        updates["Source"] = "Shopify";
+        updates["Shop Domain"] = shop;
+
+        const updated = await updateOne(
+          process.env.AIRTABLE_CUSTOMERS_TABLE_ID,
+          airtableId,
+          updates
+        );
+
+        return send(200, {
+          ok: true,
+          created: false,
+          matchedBy: "airtable_id",
+          airtableId: updated.id,
+          fields: updated.fields,
+        });
+      }
       
       // 1) If we have a Shopify user (id or email): find or create
       if (customerId || email) {
@@ -67,10 +110,15 @@ export default withShopifyProxy(
         if (record) {
           // Keep fields in sync where new data provided
           const updates = {};
+          if (customerId && record.fields["Shopify ID"] !== customerId) {
+            updates["Shopify ID"] = customerId;
+          }
           if (email && record.fields.Email !== email) updates.Email = email;
           if (firstName && record.fields["First Name"] !== firstName) updates["First Name"] = firstName;
           if (lastName && record.fields["Last Name"] !== lastName) updates["Last Name"] = lastName;
           if (phone && record.fields["Phone"] !== phone) updates["Phone"] = phone;
+          if (customerId && record.fields["Source"] !== "Shopify") updates["Source"] = "Shopify";
+          if (shop && record.fields["Shop Domain"] !== shop) updates["Shop Domain"] = shop;
 
           if (Object.keys(updates).length) {
             // Use same table identifier across all calls for continuity
@@ -93,7 +141,7 @@ export default withShopifyProxy(
           "First Name": firstName || undefined,
           "Last Name": lastName || undefined,
           "Phone": phone || undefined,
-          "Source": Shopify,
+          "Source": "Shopify",
           "Shop Domain": shop,
           "Creation Source": "Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
         });
@@ -134,7 +182,7 @@ export default withShopifyProxy(
     }
   },
   {
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "PATCH"],
     allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
     requireShop: true
   }

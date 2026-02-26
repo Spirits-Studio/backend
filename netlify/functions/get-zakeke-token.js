@@ -71,14 +71,36 @@ export default withShopifyProxy(
       const path = event?.path || urlObj?.pathname;
 
       const body = await parseBody(event, method, isV2) || {};
+      // Compatibility window: keep supporting the legacy nested payload shape.
+      const hasNestedZakekeTokenBody =
+        body &&
+        typeof body === "object" &&
+        body.zakekeTokenBody &&
+        typeof body.zakekeTokenBody === "object" &&
+        !Array.isArray(body.zakekeTokenBody);
+      const nestedBody = hasNestedZakekeTokenBody ? body.zakekeTokenBody : {};
+      if (hasNestedZakekeTokenBody) {
+        console.warn(
+          "[DEPRECATION] get-zakeke-token received nested `zakekeTokenBody`; send top-level `{ visitorcode, customercode }`.",
+          { path }
+        );
+      }
 
       const refresh = mergedQs.refresh === "1" || mergedQs.refresh === "true";
-      const accessType = mergedQs.access_type || body.access_type || body.accessType;
+      const accessType =
+        mergedQs.access_type ||
+        body.access_type ||
+        body.accessType ||
+        nestedBody.access_type ||
+        nestedBody.accessType;
 
       const visitorcode = firstValue(
         body.visitorcode,
         body.visitorCode,
         body.visitor_code,
+        nestedBody.visitorcode,
+        nestedBody.visitorCode,
+        nestedBody.visitor_code,
         mergedQs.visitorcode,
         mergedQs.visitorCode,
         mergedQs.visitor_code
@@ -88,6 +110,9 @@ export default withShopifyProxy(
         body.customercode,
         body.customerCode,
         body.customer_code,
+        nestedBody.customercode,
+        nestedBody.customerCode,
+        nestedBody.customer_code,
         mergedQs.customercode,
         mergedQs.customerCode,
         mergedQs.customer_code

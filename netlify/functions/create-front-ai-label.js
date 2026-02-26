@@ -42,13 +42,16 @@ async function readBody(req) {
         if (typeof value === 'string') {
           obj[key] = value;
         } else if (value && typeof value.arrayBuffer === 'function') {
-          // File/Blob – convert to data URL if it's the logo
+          // File/Blob – convert supported image inputs to data URLs
           const mime = value.type || 'application/octet-stream';
           const ab = await value.arrayBuffer();
           const b64 = Buffer.from(ab).toString('base64');
           if (key === 'logo') {
             obj.logoDataUrl = `data:${mime};base64,${b64}`;
             obj.logoName = value.name || 'logo';
+          } else if (key === "character") {
+            obj.characterDataUrl = `data:${mime};base64,${b64}`;
+            obj.characterName = value.name || "character";
           } else {
             // keep as generic attachment if needed later
             obj[key] = { name: value.name || 'file', mime, size: ab.byteLength, base64: b64 };
@@ -73,6 +76,16 @@ function pickDataUrl(obj, keys = []) {
     if (typeof v === 'string' && v.startsWith('data:')) return v;
   }
   return '';
+}
+
+function pickHttpUrl(obj, keys = []) {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (typeof v !== "string") continue;
+    const trimmed = v.trim();
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  }
+  return "";
 }
 
 function normalizeHex(hex = '') {
@@ -275,6 +288,48 @@ function parseDataUrlToBuffer(dataUrl) {
   return { buffer, mimeType };
 }
 
+async function resolveInputAsset({
+  body,
+  qs,
+  dataKeys = [],
+  urlKeys = [],
+  s3Prefix,
+  assetName,
+  metadata = {},
+}) {
+  const dataUrl = pickDataUrl(body, dataKeys) || pickDataUrl(qs, dataKeys);
+  const directUrl = pickHttpUrl(body, urlKeys) || pickHttpUrl(qs, urlKeys);
+
+  let inlineData = null;
+  let inputUrl = directUrl || "";
+
+  if (dataUrl) {
+    inlineData = dataUrlToInlineData(dataUrl);
+    const { buffer, mimeType } = parseDataUrlToBuffer(dataUrl);
+    if (!inlineData || !buffer || !buffer.length) {
+      const err = new Error(`${assetName} must be a valid data URL when provided.`);
+      err.status = 400;
+      throw err;
+    }
+
+    const ext = mimeToExt(mimeType);
+    const key = `${s3Prefix}_${assetName}_${Date.now()}.${ext}`;
+    inputUrl = await uploadBufferToS3({
+      buffer,
+      contentType: mimeType || "application/octet-stream",
+      key,
+      metadata,
+    });
+    return { inlineData, inputUrl, hasDataUrl: true };
+  }
+
+  if (directUrl) {
+    inlineData = await urlToInlineData(directUrl);
+  }
+
+  return { inlineData, inputUrl, hasDataUrl: false };
+}
+
 // --- Normalise bottle & side casing to match keys above ---
 function normaliseBottle(name = "") {
   if (!name) return "";
@@ -471,14 +526,20 @@ async function main(arg, { qs, method }) {
     // Reset collector per-invocation
     debugImages.length = 0;
 
-    // Optional logo as data URL (if client sends it)
-    const logoDataUrl = pickDataUrl(body, ['logoDataUrl', 'logo']) || pickDataUrl(qs, ['logoDataUrl']);
-    const logoInline = logoDataUrl ? dataUrlToInlineData(logoDataUrl) : null;
-    const characterDataUrl = pickDataUrl(body, ['characterDataUrl', 'character']) || pickDataUrl(qs, ['characterDataUrl']);
-    const characterInline = characterDataUrl ? dataUrlToInlineData(characterDataUrl) : null;
+    const logoDataUrl = pickDataUrl(body, ["logoDataUrl", "logo"]) || pickDataUrl(qs, ["logoDataUrl", "logo"]);
+    const logoUrlInput =
+      pickHttpUrl(body, ["logoUrl", "input_logo_url", "inputLogoUrl"]) ||
+      pickHttpUrl(qs, ["logoUrl", "input_logo_url", "inputLogoUrl"]);
+    const characterDataUrl =
+      pickDataUrl(body, ["characterDataUrl", "character"]) || pickDataUrl(qs, ["characterDataUrl", "character"]);
+    const characterUrlInput =
+      pickHttpUrl(body, ["characterUrl", "input_character_url", "inputCharacterUrl"]) ||
+      pickHttpUrl(qs, ["characterUrl", "input_character_url", "inputCharacterUrl"]);
 
     const bottleName = normaliseBottle(rawBottle);
     const dims = labelDimensions[bottleName] || null;
+    const sIdSafe = sanitizeId(sessionId) || String(Date.now());
+    const bottleSafe = sanitizeId(bottleName.toLowerCase() || "unknown");
 
         console.log('create-front-ai-label incoming:', {
           method,
@@ -493,10 +554,10 @@ async function main(arg, { qs, method }) {
           includeHexes: includeHexes,
           primaryHex,
           secondaryHex,
-          logoDataUrl,
-          logoInline: Boolean(logoInline),
-          characterDataUrl,
-          characterInline: Boolean(characterInline),
+          hasLogoDataUrl: Boolean(logoDataUrl),
+          hasLogoUrlInput: Boolean(logoUrlInput),
+          hasCharacterDataUrl: Boolean(characterDataUrl),
+          hasCharacterUrlInput: Boolean(characterUrlInput),
           sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
           hasCritique: Boolean(critique),
           hasPreviousImage,
@@ -525,7 +586,58 @@ async function main(arg, { qs, method }) {
       };
     }
 
-        const isRevision = Boolean(critique && hasPreviousImage);
+    let logoInline = null;
+    let characterInline = null;
+    let inputLogoUrl = logoUrlInput || "";
+    let inputCharacterUrl = characterUrlInput || "";
+    try {
+      const inputPrefix = `sessions/${sIdSafe}/${bottleSafe}/front_input`;
+      const [logoAsset, characterAsset] = await Promise.all([
+        resolveInputAsset({
+          body,
+          qs,
+          dataKeys: ["logoDataUrl", "logo"],
+          urlKeys: ["logoUrl", "input_logo_url", "inputLogoUrl"],
+          s3Prefix: inputPrefix,
+          assetName: "logo",
+          metadata: {
+            "bnb-stage": "session",
+            "bnb-design-side": "front",
+            "bnb-bottle": bottleSafe,
+            "bnb-source": "ai-input-logo",
+            "bnb-session-id": sIdSafe,
+          },
+        }),
+        resolveInputAsset({
+          body,
+          qs,
+          dataKeys: ["characterDataUrl", "character"],
+          urlKeys: ["characterUrl", "input_character_url", "inputCharacterUrl"],
+          s3Prefix: inputPrefix,
+          assetName: "character",
+          metadata: {
+            "bnb-stage": "session",
+            "bnb-design-side": "front",
+            "bnb-bottle": bottleSafe,
+            "bnb-source": "ai-input-character",
+            "bnb-session-id": sIdSafe,
+          },
+        }),
+      ]);
+      logoInline = logoAsset.inlineData;
+      characterInline = characterAsset.inlineData;
+      inputLogoUrl = logoAsset.inputUrl || "";
+      inputCharacterUrl = characterAsset.inputUrl || "";
+    } catch (assetError) {
+      return {
+        statusCode: assetError?.status || 500,
+        body: JSON.stringify({
+          message: assetError?.message || "Failed to process input assets",
+        }),
+      };
+    }
+
+    const isRevision = Boolean(critique && hasPreviousImage);
 
     const finalPrompt = isRevision
       ? buildRevisePrompt({
@@ -647,8 +759,6 @@ async function main(arg, { qs, method }) {
 
     // Upload generated images to S3
     const bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
-    const sIdSafe = sanitizeId(sessionId) || String(Date.now());
-    const bottleSafe = sanitizeId(bottleName.toLowerCase() || "unknown");
     const basePrefix = `sessions/${sIdSafe}/${bottleSafe}/front`;
 
     const uploaded = [];
@@ -697,6 +807,8 @@ async function main(arg, { qs, method }) {
         // S3 results
         s3Uploads: uploaded,
         frontS3Url,
+        inputLogoUrl,
+        inputCharacterUrl,
         modelMessage,
         ...(debugOn ? { debugImages } : {}),
       }),

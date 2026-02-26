@@ -113,7 +113,7 @@ function corsHeaders(origin) {
   ]);
 
   const headers = {
-    'Access-Control-Allow-Methods': 'GET,OPTIONS,POST',
+    'Access-Control-Allow-Methods': 'GET,OPTIONS,POST,PATCH',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
     'Access-Control-Allow-Credentials': 'true',
     'Cache-Control': 'no-store',

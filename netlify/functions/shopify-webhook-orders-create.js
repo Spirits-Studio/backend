@@ -1,46 +1,89 @@
-import crypto from 'crypto';
-import { createOne, updateOne, findOneBy } from '../../src/lib/airtable.js';
+import crypto from "crypto";
+import {
+  STUDIO_TABLES,
+  STUDIO_FIELDS,
+  normalizeRecordId,
+  createResilient,
+  updateResilient,
+  getRecordOrNull,
+} from "./_lib/studio.js";
 
 function verifyHmac(req, rawBody) {
   const digest = crypto
-    .createHmac('sha256', process.env.SHOPIFY_WEBHOOK_SECRET)
-    .update(rawBody, 'utf8')
-    .digest('base64');
-  return req.headers['x-shopify-hmac-sha256'] === digest;
+    .createHmac("sha256", process.env.SHOPIFY_WEBHOOK_SECRET)
+    .update(rawBody, "utf8")
+    .digest("base64");
+  return req.headers["x-shopify-hmac-sha256"] === digest;
 }
+
+const getLineItemProperties = (lineItem) =>
+  (lineItem?.properties || []).reduce((acc, pair) => {
+    if (pair?.name) acc[pair.name] = pair.value;
+    return acc;
+  }, {});
 
 export default async (req, res) => {
   const chunks = [];
-  for await (const c of req) chunks.push(c);
-  const raw = Buffer.concat(chunks).toString('utf8') || '{}';
+  for await (const chunk of req) chunks.push(chunk);
+  const raw = Buffer.concat(chunks).toString("utf8") || "{}";
 
   if (!verifyHmac(req, raw)) {
-    res.status(401).end('invalid hmac'); return;
+    res.status(401).end("invalid hmac");
+    return;
   }
 
   const order = JSON.parse(raw);
-  // find configId on each line item
-  for (const li of order.line_items || []) {
-    const props = (li.properties || []).reduce((a, p) => (a[p.name] = p.value, a), {});
-    const cfg = props['Config ID'];
-    if (!cfg) continue;
+  const orderId = String(order?.id || "");
+  const userEmail = order?.email || order?.customer?.email || null;
 
-    const userEmail = order.email || order.customer?.email || null;
-    // Optionally link to existing user by email
-    // const userRec = await findOneBy(process.env.AIRTABLE_USERS_TABLE, 'email', userEmail);
+  const touchedConfigIds = [];
 
-    await createOne(process.env.AIRTABLE_ORDERS_TABLE, {
-      orderId: String(order.id),
-      shopifyOrderId: String(order.id),
-      email: userEmail,
-      configId: cfg,
-      totalPrice: order.total_price,
-      createdAt: new Date().toISOString()
-    });
+  for (const lineItem of order?.line_items || []) {
+    const props = getLineItemProperties(lineItem);
+    const savedConfigurationRecordId = normalizeRecordId(
+      props["_saved_configuration_id"] || props["Config ID"] || ""
+    );
+    if (!savedConfigurationRecordId) continue;
 
-    // You may also update SavedConfigs.status = "ordered"
-    // (if your table uses configId as primary key, adjust to update by record id)
+    touchedConfigIds.push(savedConfigurationRecordId);
+
+    const orderRecord = await createResilient(
+      STUDIO_TABLES.orders,
+      {},
+      {
+        orderId,
+        shopifyOrderId: orderId,
+        email: userEmail || undefined,
+        configId: savedConfigurationRecordId,
+        totalPrice: order?.total_price || undefined,
+        createdAt: new Date().toISOString(),
+        "Saved Configuration": [savedConfigurationRecordId],
+        savedConfigurationId: savedConfigurationRecordId,
+      }
+    );
+
+    const savedConfig = await getRecordOrNull(
+      STUDIO_TABLES.savedConfigurations,
+      savedConfigurationRecordId
+    );
+    if (!savedConfig) continue;
+
+    await updateResilient(
+      STUDIO_TABLES.savedConfigurations,
+      savedConfigurationRecordId,
+      {},
+      {
+        [STUDIO_FIELDS.savedConfigurations.status]: "Ordered",
+        [STUDIO_FIELDS.savedConfigurations.order]: orderRecord?.id
+          ? [orderRecord.id]
+          : undefined,
+      }
+    );
   }
 
-  res.status(200).end('ok');
+  res.status(200).json({
+    ok: true,
+    order_id: orderId,
+    updated_saved_configurations: touchedConfigIds,
+  });
 };

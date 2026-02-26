@@ -7,8 +7,11 @@
   },
   "scripts": {
     "dev": "netlify dev",
+    "test": "node --test",
     "build": "echo \"skip build\"",
     "build:functions": "netlify functions:build",
+    "check:studio-schema": "node scripts/check-studio-airtable-schema.mjs",
+    "backfill:studio-session-id": "node scripts/backfill-studio-session-id.mjs",
     "deploy": "netlify deploy --prod"
   },
   "dependencies": {
