@@ -155,6 +155,34 @@ test("inferred label path allows same-customer fork/edit", async () => {
   );
 });
 
+test("rejected attempts are not persisted", async () => {
+  let createCalls = 0;
+  let updateCalls = 0;
+
+  const handler = createStudioSaveLabelVersionHandler({
+    parseBodyImpl: async () => ({
+      ...baseBody(),
+      accepted: false,
+    }),
+    assertPayloadSizeImpl: () => {},
+    sendJsonImpl: sendJsonForTests,
+    createResilientImpl: async () => {
+      createCalls += 1;
+      return { id: "recUnexpectedCreate" };
+    },
+    updateResilientImpl: async () => {
+      updateCalls += 1;
+      return { id: "recUnexpectedUpdate" };
+    },
+  });
+
+  const result = await handler({}, { qs: {}, isV2: false, method: "POST" });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.error, "not_accepted");
+  assert.equal(createCalls, 0);
+  assert.equal(updateCalls, 0);
+});
+
 test("inferred label path backfills session id from linked label when omitted", async () => {
   const createCalls = [];
   const updateCalls = [];

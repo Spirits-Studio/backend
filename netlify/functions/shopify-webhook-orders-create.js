@@ -6,6 +6,7 @@ import {
   createResilient,
   updateResilient,
   getRecordOrNull,
+  getLinkedIds,
 } from "./_lib/studio.js";
 
 function verifyHmac(req, rawBody) {
@@ -34,7 +35,6 @@ export default async (req, res) => {
 
   const order = JSON.parse(raw);
   const orderId = String(order?.id || "");
-  const userEmail = order?.email || order?.customer?.email || null;
 
   const touchedConfigIds = [];
 
@@ -47,26 +47,29 @@ export default async (req, res) => {
 
     touchedConfigIds.push(savedConfigurationRecordId);
 
-    const orderRecord = await createResilient(
-      STUDIO_TABLES.orders,
-      {},
-      {
-        orderId,
-        shopifyOrderId: orderId,
-        email: userEmail || undefined,
-        configId: savedConfigurationRecordId,
-        totalPrice: order?.total_price || undefined,
-        createdAt: new Date().toISOString(),
-        "Saved Configuration": [savedConfigurationRecordId],
-        savedConfigurationId: savedConfigurationRecordId,
-      }
-    );
-
     const savedConfig = await getRecordOrNull(
       STUDIO_TABLES.savedConfigurations,
       savedConfigurationRecordId
     );
     if (!savedConfig) continue;
+
+    const linkedCustomerIds = getLinkedIds(
+      savedConfig,
+      STUDIO_FIELDS.savedConfigurations.customer
+    );
+    // Airtable schema currently exposes a single valid choice for this field.
+    const orderStatus = "Order Received";
+
+    const orderRecord = await createResilient(
+      STUDIO_TABLES.orders,
+      {},
+      {
+        "Order ID": orderId || undefined,
+        Customer: linkedCustomerIds.length ? linkedCustomerIds : undefined,
+        "Saved Configuration": [savedConfigurationRecordId],
+        "Order Status": orderStatus || undefined,
+      }
+    );
 
     await updateResilient(
       STUDIO_TABLES.savedConfigurations,

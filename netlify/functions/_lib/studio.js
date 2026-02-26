@@ -16,7 +16,7 @@ export const STUDIO_TABLES = {
   orders:
     process.env.AIRTABLE_ORDERS_TABLE_ID ||
     process.env.AIRTABLE_ORDERS_TABLE ||
-    "Orders",
+    "Orders & Fulfilment",
 };
 
 export const STUDIO_FIELDS = {
