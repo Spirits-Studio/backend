@@ -61,12 +61,88 @@ const resolveSessionId = (...values) => {
   return null;
 };
 
+const WOOD_CLOSURE_CHOICES = ["Beech", "Walnut", "Ebony"];
+const WAX_CHOICES = [
+  "No Wax Seal",
+  "Sage",
+  "Steel Blue",
+  "Midnight Blue",
+  "Royal Purple",
+  "Pink Rose",
+  "Violet",
+  "Burgundy",
+  "Tangerine",
+  "Stone",
+  "Ivory",
+  "Brilliant White",
+  "Smokey Black",
+];
+const WOOD_CLOSURE_BY_LOWER = new Map(
+  WOOD_CLOSURE_CHOICES.map((choice) => [choice.toLowerCase(), choice])
+);
+const WAX_BY_LOWER = new Map(WAX_CHOICES.map((choice) => [choice.toLowerCase(), choice]));
+
+const normalizeChoice = (value, map) => {
+  const raw = sanitizeText(value, 120);
+  if (!raw) return undefined;
+  return map.get(raw.toLowerCase()) || undefined;
+};
+
+const parseClosureAttributeOptionLabel = (snapshot) => {
+  const attrs = Array.isArray(snapshot?.zakekeAttributes) ? snapshot.zakekeAttributes : [];
+  const row = attrs.find((item) => {
+    const attributeLabel = String(item?.attributeLabel || "").toLowerCase();
+    if (attributeLabel.includes("closure")) return true;
+    const attributeCode = String(item?.attributeCode || "").toLowerCase();
+    return attributeCode.includes("closure");
+  });
+  if (!row) return undefined;
+  return sanitizeText(firstNonEmpty(row.optionLabel, row.optionCode), 120) || undefined;
+};
+
 const normalizeWaxSelection = (value) => {
   const raw = sanitizeText(value, 120);
   if (!raw) return undefined;
-  // Shopify/Zakeke often sends "Wax Sealed in <Color>", but Airtable select options
-  // are stored as just the color label.
-  return raw.replace(/^wax\s*sealed\s*in\s+/i, "").trim() || undefined;
+  if (/^no\s*wax\s*seal$/i.test(raw)) return "No Wax Seal";
+  const fromPrefixed = raw.replace(/^wax\s*sealed\s*in\s+/i, "").trim();
+  if (fromPrefixed && fromPrefixed !== raw) {
+    return WAX_BY_LOWER.get(fromPrefixed.toLowerCase()) || undefined;
+  }
+  return WAX_BY_LOWER.get(raw.toLowerCase()) || undefined;
+};
+
+const resolveClosureSelection = ({
+  closureSelection,
+  snapshotClosureName,
+  snapshotWoodName,
+  closureOptionLabel,
+}) =>
+  normalizeChoice(closureSelection, WOOD_CLOSURE_BY_LOWER) ||
+  normalizeChoice(snapshotWoodName, WOOD_CLOSURE_BY_LOWER) ||
+  normalizeChoice(snapshotClosureName, WOOD_CLOSURE_BY_LOWER) ||
+  normalizeChoice(closureOptionLabel, WOOD_CLOSURE_BY_LOWER) ||
+  undefined;
+
+const resolveWaxSelection = ({
+  waxSelection,
+  snapshotWaxName,
+  snapshotClosureName,
+  closureOptionLabel,
+}) => {
+  const explicit =
+    normalizeWaxSelection(waxSelection) ||
+    normalizeWaxSelection(snapshotWaxName) ||
+    normalizeWaxSelection(snapshotClosureName) ||
+    normalizeWaxSelection(closureOptionLabel);
+  if (explicit) return explicit;
+
+  const closureSignal =
+    sanitizeText(firstNonEmpty(snapshotClosureName, closureOptionLabel), 120)?.toLowerCase() ||
+    "";
+  if (closureSignal === "wood" || WOOD_CLOSURE_BY_LOWER.has(closureSignal)) {
+    return "No Wax Seal";
+  }
+  return undefined;
 };
 
 export default withShopifyProxy(
@@ -297,6 +373,32 @@ export default withShopifyProxy(
         defaultConfigurationId();
 
       const configJson = sanitizeText(JSON.stringify(snapshot || {}), 100_000);
+      const closureOptionLabel = parseClosureAttributeOptionLabel(snapshot);
+      const rawClosureSelection = firstNonEmpty(
+        body.closure_selection,
+        body.closureSelection,
+        snapshot?.closure?.name,
+        closureOptionLabel
+      );
+      const rawWaxSelection = firstNonEmpty(
+        body.wax_selection,
+        body.waxSelection,
+        snapshot?.closureExtras?.wax?.name,
+        snapshot?.closure?.name,
+        closureOptionLabel
+      );
+      const normalizedClosureSelection = resolveClosureSelection({
+        closureSelection: rawClosureSelection,
+        snapshotClosureName: snapshot?.closure?.name,
+        snapshotWoodName: snapshot?.closureExtras?.wood?.name,
+        closureOptionLabel,
+      });
+      const normalizedWaxSelection = resolveWaxSelection({
+        waxSelection: rawWaxSelection,
+        snapshotWaxName: snapshot?.closureExtras?.wax?.name,
+        snapshotClosureName: snapshot?.closure?.name,
+        closureOptionLabel,
+      });
 
       const sharedRequiredFields = {
         [STUDIO_FIELDS.savedConfigurations.customer]: toLinkedRecordArray(
@@ -340,17 +442,8 @@ export default withShopifyProxy(
           firstNonEmpty(body.liquid_selection, body.liquidSelection, snapshot?.liquid?.name),
           120
         ),
-        [STUDIO_FIELDS.savedConfigurations.closureSelection]: sanitizeText(
-          firstNonEmpty(body.closure_selection, body.closureSelection, snapshot?.closure?.name),
-          120
-        ),
-        [STUDIO_FIELDS.savedConfigurations.waxSelection]: normalizeWaxSelection(
-          firstNonEmpty(
-            body.wax_selection,
-            body.waxSelection,
-            snapshot?.closureExtras?.wax?.name
-          )
-        ),
+        [STUDIO_FIELDS.savedConfigurations.closureSelection]: normalizedClosureSelection,
+        [STUDIO_FIELDS.savedConfigurations.waxSelection]: normalizedWaxSelection,
         [STUDIO_FIELDS.savedConfigurations.configJson]: configJson,
         [STUDIO_FIELDS.savedConfigurations.creationSource]:
           "Shopify -> Netlify Backend (studio-save-configuration)",

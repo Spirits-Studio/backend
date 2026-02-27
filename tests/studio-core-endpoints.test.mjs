@@ -167,6 +167,7 @@ test("studio-save-configuration persists links and session contract", async () =
           fields[STUDIO_FIELDS.savedConfigurations.currentFrontLabelVersion],
           ["recVersionFrontA"]
         );
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.closureSelection], "Ebony");
         assert.equal(fields[STUDIO_FIELDS.savedConfigurations.waxSelection], "Pink Rose");
         assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.labels], ["recLabelFrontA"]);
       },
@@ -239,8 +240,11 @@ test("studio-save-configuration persists links and session contract", async () =
           snapshot: {
             bottle: { name: "Antica" },
             liquid: { name: "London Dry Gin" },
-            closure: { name: "Wood" },
-            closureExtras: { wax: { name: "Wax Sealed in Pink Rose" } },
+            closure: { name: "Wax Sealed in Pink Rose" },
+            closureExtras: {
+              wood: { name: "Ebony" },
+              wax: { name: "Wax Sealed in Pink Rose" },
+            },
           },
         },
       })
@@ -253,6 +257,59 @@ test("studio-save-configuration persists links and session contract", async () =
     assert.equal(payload.session_id, "session-123");
     assert.equal(payload.label_front_record_id, "recLabelFrontA");
     assert.equal(payload.label_front_version_id, "recVersionFrontA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("studio-save-configuration maps lite closure and default no-wax value", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "POST",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.closureSelection], "Ebony");
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.waxSelection], "No Wax Seal");
+      },
+      response: {
+        records: [
+          {
+            id: "recSavedConfigurationLiteA",
+            createdTime: "2026-02-27T10:00:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.savedConfigurations.configurationId]: "CFG-LITE-1",
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  try {
+    const response = await studioSaveConfiguration(
+      createProxyEvent({
+        method: "POST",
+        body: {
+          customer_record_id: "recCustomerA",
+          session_id: "session-lite-123",
+          status: "Saved",
+          preview_url: "https://cdn.example.com/lite-preview.png",
+          shopify_variant_id: "999999",
+          snapshot: {
+            bottle: { name: "Outlaw" },
+            liquid: { name: "Pink Gin" },
+            closure: { name: "Ebony" },
+          },
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.saved_configuration_record_id, "recSavedConfigurationLiteA");
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
