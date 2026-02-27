@@ -278,13 +278,30 @@ const mimeToExt = (mime) => {
 
 async function uploadBufferToS3({ buffer, contentType, key, metadata = {} }) {
   const Bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
-  await s3Client.send(new PutObjectCommand({
-    Bucket,
-    Key: key,
-    Body: buffer,
-    ContentType: contentType || "application/octet-stream",
-    Metadata: metadata
-  }));
+  console.log("Uploading image buffer to S3:", metadata);
+  try {
+    await s3Client.send(new PutObjectCommand({
+      Bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType || "application/octet-stream",
+      Metadata: metadata
+    }));
+  } catch (error) {
+    const code = error?.name || error?.Code || "UnknownS3Error";
+    const message = error?.message || "No S3 error message available";
+    const status = error?.$metadata?.httpStatusCode;
+    console.error("S3 upload failed", {
+      bucket: Bucket,
+      key,
+      code,
+      status,
+      message
+    });
+    throw new Error(
+      `S3 upload failed for ${key}: [${code}] ${message}${status ? ` (HTTP ${status})` : ""}`
+    );
+  }
   return `https://${Bucket}.s3.${regionParam}.amazonaws.com/${encodeURI(key)}`;
 }
 
