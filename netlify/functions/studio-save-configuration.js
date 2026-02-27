@@ -61,6 +61,14 @@ const resolveSessionId = (...values) => {
   return null;
 };
 
+const normalizeWaxSelection = (value) => {
+  const raw = sanitizeText(value, 120);
+  if (!raw) return undefined;
+  // Shopify/Zakeke often sends "Wax Sealed in <Color>", but Airtable select options
+  // are stored as just the color label.
+  return raw.replace(/^wax\s*sealed\s*in\s+/i, "").trim() || undefined;
+};
+
 export default withShopifyProxy(
   async (arg, { qs, isV2, method }) => {
     try {
@@ -336,13 +344,12 @@ export default withShopifyProxy(
           firstNonEmpty(body.closure_selection, body.closureSelection, snapshot?.closure?.name),
           120
         ),
-        [STUDIO_FIELDS.savedConfigurations.waxSelection]: sanitizeText(
+        [STUDIO_FIELDS.savedConfigurations.waxSelection]: normalizeWaxSelection(
           firstNonEmpty(
             body.wax_selection,
             body.waxSelection,
             snapshot?.closureExtras?.wax?.name
-          ),
-          120
+          )
         ),
         [STUDIO_FIELDS.savedConfigurations.configJson]: configJson,
         [STUDIO_FIELDS.savedConfigurations.creationSource]:

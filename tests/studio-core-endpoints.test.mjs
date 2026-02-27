@@ -167,6 +167,7 @@ test("studio-save-configuration persists links and session contract", async () =
           fields[STUDIO_FIELDS.savedConfigurations.currentFrontLabelVersion],
           ["recVersionFrontA"]
         );
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.waxSelection], "Pink Rose");
         assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.labels], ["recLabelFrontA"]);
       },
       response: {
@@ -239,7 +240,7 @@ test("studio-save-configuration persists links and session contract", async () =
             bottle: { name: "Antica" },
             liquid: { name: "London Dry Gin" },
             closure: { name: "Wood" },
-            closureExtras: { wax: { name: "Red" } },
+            closureExtras: { wax: { name: "Wax Sealed in Pink Rose" } },
           },
         },
       })
