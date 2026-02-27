@@ -255,7 +255,7 @@ function resolveS3Credentials() {
   const accessKeyId = process.env.SS_AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.SS_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
-  const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
+  const sessionToken = process.env.SS_AWS_SESSION_TOKEN;
   return sessionToken
     ? { accessKeyId, secretAccessKey, sessionToken }
     : { accessKeyId, secretAccessKey };
@@ -610,11 +610,11 @@ async function main(arg, { qs, method }) {
           s3Prefix: inputPrefix,
           assetName: "logo",
           metadata: {
-            "bnb-stage": "session",
-            "bnb-design-side": "front",
-            "bnb-bottle": bottleSafe,
-            "bnb-source": "ai-input-logo",
-            "bnb-session-id": sIdSafe,
+            "ss-stage": "session",
+            "ss-design-side": "front",
+            "ss-bottle": bottleSafe,
+            "ss-source": "ai-input-logo",
+            "ss-session-id": sIdSafe,
           },
         }),
         resolveInputAsset({
@@ -625,11 +625,11 @@ async function main(arg, { qs, method }) {
           s3Prefix: inputPrefix,
           assetName: "character",
           metadata: {
-            "bnb-stage": "session",
-            "bnb-design-side": "front",
-            "bnb-bottle": bottleSafe,
-            "bnb-source": "ai-input-character",
-            "bnb-session-id": sIdSafe,
+            "ss-stage": "session",
+            "ss-design-side": "front",
+            "ss-bottle": bottleSafe,
+            "ss-source": "ai-input-character",
+            "ss-session-id": sIdSafe,
           },
         }),
       ]);
@@ -783,11 +783,11 @@ async function main(arg, { qs, method }) {
         contentType: mimeType || "image/png",
         key,
         metadata: {
-          "bnb-stage": "session",
-          "bnb-design-side": "front",
-          "bnb-bottle": bottleSafe,
-          "bnb-source": "ai-generate",
-          "bnb-session-id": sIdSafe
+          "ss-stage": "session",
+          "ss-design-side": "front",
+          "ss-bottle": bottleSafe,
+          "ss-source": "ai-generate",
+          "ss-session-id": sIdSafe
         }
       });
       uploaded.push({ key, url, contentType: mimeType });

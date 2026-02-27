@@ -233,7 +233,7 @@ function resolveS3Credentials() {
   const accessKeyId = process.env.SS_AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.SS_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
-  const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
+  const sessionToken = process.env.SS_AWS_SESSION_TOKEN;
   return sessionToken
     ? { accessKeyId, secretAccessKey, sessionToken }
     : { accessKeyId, secretAccessKey };
@@ -683,11 +683,11 @@ async function main(arg, { qs, method }) {
             contentType: mimeType || "image/png",
             key,
             metadata: {
-              "bnb-stage": "review",
-              "bnb-design-side": designSide,
-              "bnb-bottle": bottleSafe,
-              "bnb-source": "ai-review",
-              "bnb-session-id": sIdSafe
+              "ss-stage": "review",
+              "ss-design-side": designSide,
+              "ss-bottle": bottleSafe,
+              "ss-source": "ai-review",
+              "ss-session-id": sIdSafe
             }
           });
           uploaded.push({ key, url, contentType: mimeType });

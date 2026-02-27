@@ -54,7 +54,7 @@ const resolveS3Credentials = () => {
   const accessKeyId = process.env.SS_AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.SS_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
-  const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
+  const sessionToken = process.env.SS_AWS_SESSION_TOKEN;
   return sessionToken ? { accessKeyId, secretAccessKey, sessionToken } : { accessKeyId, secretAccessKey };
 };
 
@@ -434,25 +434,25 @@ const handler = async (arg, { qs = {}, isV2, method }) => {
     const key = `${keyBase}/${designKey}_label.pdf`;
 
     const metadata = {
-      "bnb-stage": stage,
-      "bnb-design-side": designKey,
-      "bnb-bottle": bottleKey,
-      "bnb-expected-width-mm": String(roundMm(expectedDims.widthMm)),
-      "bnb-expected-height-mm": String(roundMm(expectedDims.heightMm)),
-      "bnb-actual-width-mm": String(roundMm(actualWidthMm)),
-      "bnb-actual-height-mm": String(roundMm(actualHeightMm)),
-      "bnb-bleed-per-side-mm": String(BLEED_PER_SIDE_MM),
-      "bnb-page-count": String(pageCount)
+      "ss-stage": stage,
+      "ss-design-side": designKey,
+      "ss-bottle": bottleKey,
+      "ss-expected-width-mm": String(roundMm(expectedDims.widthMm)),
+      "ss-expected-height-mm": String(roundMm(expectedDims.heightMm)),
+      "ss-actual-width-mm": String(roundMm(actualWidthMm)),
+      "ss-actual-height-mm": String(roundMm(actualHeightMm)),
+      "ss-bleed-per-side-mm": String(BLEED_PER_SIDE_MM),
+      "ss-page-count": String(pageCount)
     };
 
     if (originalFilename) {
-      metadata["bnb-original-filename"] = originalFilename.slice(-1024);
+      metadata["ss-original-filename"] = originalFilename.slice(-1024);
     }
 
     if (stage === "session") {
-      metadata["bnb-session-id"] = sessionId;
+      metadata["ss-session-id"] = sessionId;
     } else {
-      metadata["bnb-order-id"] = orderId;
+      metadata["ss-order-id"] = orderId;
     }
 
     const putParams = {

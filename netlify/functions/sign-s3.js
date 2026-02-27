@@ -17,7 +17,7 @@ const resolveS3Credentials = () => {
   const accessKeyId = process.env.SS_AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.SS_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
-  const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
+  const sessionToken = process.env.SS_AWS_SESSION_TOKEN;
   return sessionToken ? { accessKeyId, secretAccessKey, sessionToken } : { accessKeyId, secretAccessKey };
 };
 
@@ -74,16 +74,16 @@ export default withShopifyProxy(async (event, { isV2, method }) => {
 
   // Build metadata like your upload function does
   const meta = {
-    "bnb-stage": stage || (sessionId ? "session" : orderId ? "order" : ""),
-    "bnb-design-side": (design_side || "").toLowerCase(),
-    "bnb-bottle": (bottle || "").toLowerCase(),
-    "bnb-source": "browser-presigned",
+    "ss-stage": stage || (sessionId ? "session" : orderId ? "order" : ""),
+    "ss-design-side": (design_side || "").toLowerCase(),
+    "ss-bottle": (bottle || "").toLowerCase(),
+    "ss-source": "browser-presigned",
   };
-  if (sessionId) meta["bnb-session-id"] = String(sessionId);
-  if (orderId)   meta["bnb-order-id"]   = String(orderId);
-  if (expectedWidthMm)  meta["bnb-expected-width-mm"]  = String(expectedWidthMm);
-  if (expectedHeightMm) meta["bnb-expected-height-mm"] = String(expectedHeightMm);
-  if (bleedPerSideMm)   meta["bnb-bleed-per-side-mm"]  = String(bleedPerSideMm);
+  if (sessionId) meta["ss-session-id"] = String(sessionId);
+  if (orderId)   meta["ss-order-id"]   = String(orderId);
+  if (expectedWidthMm)  meta["ss-expected-width-mm"]  = String(expectedWidthMm);
+  if (expectedHeightMm) meta["ss-expected-height-mm"] = String(expectedHeightMm);
+  if (bleedPerSideMm)   meta["ss-bleed-per-side-mm"]  = String(bleedPerSideMm);
 
   // Prepare command with headers we want the browser to also send
   const cmd = new PutObjectCommand({

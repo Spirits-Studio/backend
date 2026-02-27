@@ -50,7 +50,7 @@ const resolveS3Credentials = () => {
   const accessKeyId = process.env.SS_AWS_ACCESS_KEY_ID;
   const secretAccessKey = process.env.SS_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
-  const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
+  const sessionToken = process.env.SS_AWS_SESSION_TOKEN;
   return sessionToken ? { accessKeyId, secretAccessKey, sessionToken } : { accessKeyId, secretAccessKey };
 };
 
@@ -385,22 +385,22 @@ const handler = async (event, { qs = {}, isV2, method }) => {
       const pdfKey = `${keyBase}/${baseFileName}.pdf`;
 
       const metadataBase = {
-        "bnb-stage": stage,
-        "bnb-design-side": designKey,
-        "bnb-bottle": bottleKey,
-        "bnb-expected-width-mm": String(roundMm(expectedDims.widthMm)),
-        "bnb-expected-height-mm": String(roundMm(expectedDims.heightMm)),
-        "bnb-actual-width-px": String(widthPx),
-        "bnb-actual-height-px": String(heightPx),
-        "bnb-bleed-per-side-mm": String(BLEED_PER_SIDE_MM),
-        "bnb-orientation": orientation,
-        "bnb-source": "base64"
+        "ss-stage": stage,
+        "ss-design-side": designKey,
+        "ss-bottle": bottleKey,
+        "ss-expected-width-mm": String(roundMm(expectedDims.widthMm)),
+        "ss-expected-height-mm": String(roundMm(expectedDims.heightMm)),
+        "ss-actual-width-px": String(widthPx),
+        "ss-actual-height-px": String(heightPx),
+        "ss-bleed-per-side-mm": String(BLEED_PER_SIDE_MM),
+        "ss-orientation": orientation,
+        "ss-source": "base64"
       };
 
       if (stage === "session") {
-        metadataBase["bnb-session-id"] = sessionId;
+        metadataBase["ss-session-id"] = sessionId;
       } else {
-        metadataBase["bnb-order-id"] = orderId;
+        metadataBase["ss-order-id"] = orderId;
       }
 
       await uploadToS3({
@@ -430,7 +430,7 @@ const handler = async (event, { qs = {}, isV2, method }) => {
         contentType: "application/pdf",
         metadata: {
           ...metadataBase,
-          "bnb-original-key": originalKey
+          "ss-original-key": originalKey
         }
       });
 
