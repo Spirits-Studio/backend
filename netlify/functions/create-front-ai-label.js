@@ -792,9 +792,7 @@ async function main(arg, { qs, method }) {
     // //
     // // Code removed for now per request
 
-    return {
-      statusCode: 200,
-      body: JSON.stringify({
+    const responsePayload = {
         message: "AI image generated successfully",
         model: modelId,
         bottleName,
@@ -810,12 +808,23 @@ async function main(arg, { qs, method }) {
         inputLogoUrl,
         inputCharacterUrl,
         modelMessage,
-        ...(debugOn ? { debugImages } : {}),
-      }),
+        ...(debugOn ? { debug: { enabled: true, imagesCaptured: debugImages.length } } : {}),
+      };
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify(responsePayload),
     };
   } catch (err) {
     console.error("create-front-ai-label unhandled error:", err);
-    return { statusCode: 500, body: String(err?.message || err), debugImages };
+    return {
+      statusCode: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: String(err?.message || err || "create-front-ai-label failed"),
+        ...(debugOn ? { debug: { enabled: true, imagesCaptured: debugImages.length } } : {}),
+      }),
+    };
   }
 }
 
