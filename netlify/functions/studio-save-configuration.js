@@ -360,7 +360,15 @@ export default withShopifyProxy(
       );
 
       const displayName =
-        sanitizeName(firstNonEmpty(body.display_name, body.displayName)) ||
+        sanitizeName(
+          firstNonEmpty(
+            body.display_name,
+            body.displayName,
+            snapshot?.display_name,
+            snapshot?.displayName,
+            snapshot?.title
+          )
+        ) ||
         sanitizeName(`${snapshot?.bottle?.name || "Custom"} Configuration`);
 
       const status =

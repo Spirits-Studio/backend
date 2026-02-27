@@ -302,10 +302,17 @@ export const createStudioSaveLabelVersionHandler = ({
         }
       }
 
+      const labelDisplayName = sanitizeName(
+        firstNonEmpty(
+          body.label_display_name,
+          body.labelDisplayName,
+          body.display_name,
+          body.displayName,
+          body.title
+        )
+      );
+
       if (!labelRecord) {
-        const labelDisplayName = sanitizeName(
-          firstNonEmpty(body.label_display_name, body.labelDisplayName)
-        );
         labelRecord = await createResilientImpl(
           STUDIO_TABLES.labels,
           {},
@@ -408,6 +415,7 @@ export const createStudioSaveLabelVersionHandler = ({
         {},
         {
           [STUDIO_FIELDS.labels.customers]: toLinkedRecordArray(customerRecordId),
+          [STUDIO_FIELDS.labels.displayName]: labelDisplayName || undefined,
           [STUDIO_FIELDS.labels.labelVersions]:
             mergedVersionIds.length ? mergedVersionIds : undefined,
           [STUDIO_FIELDS.labels.sessionId]: resolvedSessionId || undefined,

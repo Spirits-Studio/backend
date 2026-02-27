@@ -90,6 +90,7 @@ test("inferred label path allows same-customer fork/edit", async () => {
       ...baseBody(),
       previous_label_version_record_id: "recPrevOwned",
       session_id: "session-123",
+      label_display_name: "Bottle Title QA",
     }),
     assertPayloadSizeImpl: () => {},
     sendJsonImpl: sendJsonForTests,
@@ -152,6 +153,10 @@ test("inferred label path allows same-customer fork/edit", async () => {
   assert.equal(
     updateCalls[0].optionalFields[STUDIO_FIELDS.labels.sessionId],
     "session-123"
+  );
+  assert.equal(
+    updateCalls[0].optionalFields[STUDIO_FIELDS.labels.displayName],
+    "Bottle Title QA"
   );
 });
 
