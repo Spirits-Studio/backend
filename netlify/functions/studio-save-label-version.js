@@ -419,7 +419,6 @@ export const createStudioSaveLabelVersionHandler = ({
                 {
                   fallbackFieldNames:
                     STUDIO_FIELD_FALLBACKS.labels.currentFrontLabelVersion,
-                  includeFallbacksWhenUnknown: true,
                 }
               )
             : {}),
@@ -431,7 +430,6 @@ export const createStudioSaveLabelVersionHandler = ({
                 {
                   fallbackFieldNames:
                     STUDIO_FIELD_FALLBACKS.labels.currentBackLabelVersion,
-                  includeFallbacksWhenUnknown: true,
                 }
               )
             : {}),

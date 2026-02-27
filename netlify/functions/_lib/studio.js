@@ -297,8 +297,16 @@ export const sanitizeName = (value) => {
 
 const extractUnknownFieldName = (error) => {
   const responseText = String(error?.responseText || "");
+  let parsedMessage = "";
+  try {
+    const parsed = JSON.parse(responseText || "{}");
+    parsedMessage = String(parsed?.error?.message || "");
+  } catch {}
   const message = String(error?.message || "");
-  const haystack = `${responseText}\n${message}`;
+  const haystack = `${parsedMessage}\n${responseText}\n${message}`.replace(
+    /\\"/g,
+    '"'
+  );
   const match = haystack.match(UNKNOWN_FIELD_RE) || haystack.match(UNKNOWN_FIELD_ALT_RE);
   return match?.[1] || null;
 };
