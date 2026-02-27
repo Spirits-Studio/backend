@@ -47,8 +47,8 @@ const respond = (status, body) =>
   });
 
 const resolveS3Credentials = () => {
-  const accessKeyId = process.env.BNB_AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.BNB_AWS_SECRET_ACCESS_KEY;
+  const accessKeyId = process.env.SS_AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.SS_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
   const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
   return sessionToken ? { accessKeyId, secretAccessKey, sessionToken } : { accessKeyId, secretAccessKey };

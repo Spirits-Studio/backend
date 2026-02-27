@@ -16,6 +16,15 @@ function getGeminiKey() {
   );
 }
 
+// --- Helper: read Gemini model from canonical env names (with latest fallback) ---
+function getGeminiModel() {
+  return (
+    process.env.GEMINI_MODEL_IMAGES ||
+    process.env.GEMINI_MODEL_LATEST ||
+    'gemini-pro-latest'
+  )
+}
+
 // --- Helper: safe JSON parse ---
 function safeParseJSON(input) {
   if (!input) return {};
@@ -243,8 +252,8 @@ const regionParam =
   DEFAULT_REGION;
 
 function resolveS3Credentials() {
-  const accessKeyId = process.env.BNB_AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.BNB_AWS_SECRET_ACCESS_KEY;
+  const accessKeyId = process.env.SS_AWS_ACCESS_KEY_ID;
+  const secretAccessKey = process.env.SS_AWS_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) return undefined;
   const sessionToken = process.env.BNB_AWS_SESSION_TOKEN;
   return sessionToken
@@ -675,7 +684,8 @@ async function main(arg, { qs, method }) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const modelId = "gemini-3-pro-image-preview";
+    const geminiModel = getGeminiModel();
+    const modelId = geminiModel;
 
     // Prepare contents in one place for better legibility
     let genContents = await buildContents({

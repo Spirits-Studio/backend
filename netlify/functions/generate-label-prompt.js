@@ -10,6 +10,14 @@ function getGeminiKey() {
   );
 }
 
+function getGeminiModel() {
+  return (
+    process.env.GEMINI_MODEL_PROMPTS ||
+    process.env.GEMINI_MODEL_LATEST ||
+    'gemini-pro-latest'
+  )
+}
+
 function safeParseJSON(input) {
   if (!input) return {};
   if (typeof input === "object") return input;
@@ -90,8 +98,10 @@ export default withShopifyProxy(
         body.paletteVibe ? `Palette vibe: ${normalize(body.paletteVibe)}`: '',
       ].join("\n");
 
+      const geminiModel = getGeminiModel();
+
       const result = await ai.models.generateContent({
-        model: "gemini-3-pro-preview",
+        model: geminiModel,
         contents: [{ role: "user", parts: [{ text: userPrompt }] }],
         generationConfig: { temperature: 0.6, topP: 0.9, maxOutputTokens: 256 },
       });

@@ -15,6 +15,15 @@ function getGeminiKey() {
   );
 }
 
+// --- Helper: read Gemini model from canonical env names (with latest fallback) ---
+function getGeminiModel() {
+  return (
+    process.env.GEMINI_MODEL_IMAGES ||
+    process.env.GEMINI_MODEL_LATEST ||
+    'gemini-pro-latest'
+  )
+}
+
 // --- Helper: safe JSON parse ---
 function safeParseJSON(input) {
   if (!input) return {};
@@ -485,7 +494,8 @@ async function main(arg, { qs, method }) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const modelId = "gemini-3-pro-image-preview";
+    const geminiModel = getGeminiModel();
+    const modelId = geminiModel;
 
     // Prepare contents in one place for better legibility
     let genContents = await buildContents({
