@@ -3,6 +3,7 @@ import {
   updateOne,
   getOne,
   listRecords,
+  findOneBy,
   escapeFormulaValue,
 } from "../../../src/lib/airtable.js";
 
@@ -390,3 +391,153 @@ export const mapErrorResponse = (error) => ({
   method: error?.method,
   responseText: error?.responseText,
 });
+
+const sanitizeCustomerIdentityValue = (value, maxLen = 255) => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  return text.slice(0, maxLen);
+};
+
+const normalizeShopifyIdValue = (value) => {
+  const text = sanitizeCustomerIdentityValue(value, 255);
+  if (!text) return null;
+  return normalizeRecordId(text) ? null : text;
+};
+
+const normalizeEmailValue = (value) => {
+  const text = sanitizeCustomerIdentityValue(value, 255);
+  if (!text || !text.includes("@")) return null;
+  return text.toLowerCase();
+};
+
+const buildLegacyShopifyIdAlias = (missingRecordId) => {
+  const recId = normalizeRecordId(missingRecordId);
+  if (!recId) return null;
+  return `legacy_airtable_record:${recId}`.slice(0, 255);
+};
+
+const resolveCustomerIdentity = ({ body = {}, qs = {} } = {}) => {
+  const shopifyIdCandidates = [
+    body.shopify_customer_id,
+    body.shopifyCustomerId,
+    body.customer_shopify_id,
+    body.shopify_id,
+    body.shopifyId,
+    qs.logged_in_customer_id,
+    qs.customer_shopify_id,
+    qs.shopify_customer_id,
+    qs.shopify_id,
+    body.customer_id,
+    body.customerId,
+    qs.customer_id,
+  ];
+  const emailCandidates = [
+    body.email,
+    body.customer_email,
+    body.customerEmail,
+    qs.email,
+    qs.customer_email,
+    qs.logged_in_customer_email,
+  ];
+
+  let shopifyId = null;
+  for (const candidate of shopifyIdCandidates) {
+    shopifyId = normalizeShopifyIdValue(candidate);
+    if (shopifyId) break;
+  }
+
+  let email = null;
+  for (const candidate of emailCandidates) {
+    email = normalizeEmailValue(candidate);
+    if (email) break;
+  }
+
+  const firstName = sanitizeCustomerIdentityValue(
+    firstNonEmpty(body.first_name, body.firstName, qs.first_name),
+    120
+  );
+  const lastName = sanitizeCustomerIdentityValue(
+    firstNonEmpty(body.last_name, body.lastName, qs.last_name),
+    120
+  );
+  const phone = sanitizeCustomerIdentityValue(
+    firstNonEmpty(body.phone, body.customer_phone, body.customerPhone, qs.phone),
+    60
+  );
+
+  return { shopifyId, email, firstName, lastName, phone };
+};
+
+const findCustomerByField = async (fieldName, value) => {
+  const text = sanitizeCustomerIdentityValue(value, 255);
+  if (!text) return null;
+  const record = await findOneBy(STUDIO_TABLES.customers, fieldName, text);
+  return record?.id ? record : null;
+};
+
+export const resolveCustomerRecordIdOrCreate = async ({
+  providedCustomerRecordId,
+  body = {},
+  qs = {},
+} = {}) => {
+  const providedRecordId = normalizeRecordId(providedCustomerRecordId);
+  if (providedRecordId) {
+    const existing = await getRecordOrNull(STUDIO_TABLES.customers, providedRecordId);
+    if (existing?.id) {
+      return {
+        customerRecordId: existing.id,
+        created: false,
+        recovered: false,
+      };
+    }
+  }
+
+  const identity = resolveCustomerIdentity({ body, qs });
+  const legacyAlias = buildLegacyShopifyIdAlias(providedRecordId);
+  const shopifySearchCandidates = [
+    identity.shopifyId,
+    identity.shopifyId !== legacyAlias ? legacyAlias : null,
+  ].filter(Boolean);
+
+  for (const shopifyId of shopifySearchCandidates) {
+    const matched = await findCustomerByField("Shopify ID", shopifyId);
+    if (matched?.id) {
+      return {
+        customerRecordId: matched.id,
+        created: false,
+        recovered: Boolean(providedRecordId && matched.id !== providedRecordId),
+      };
+    }
+  }
+
+  if (identity.email) {
+    const matchedByEmail = await findCustomerByField("Email", identity.email);
+    if (matchedByEmail?.id) {
+      return {
+        customerRecordId: matchedByEmail.id,
+        created: false,
+        recovered: Boolean(
+          providedRecordId && matchedByEmail.id !== providedRecordId
+        ),
+      };
+    }
+  }
+
+  const created = await createResilient(
+    STUDIO_TABLES.customers,
+    {},
+    {
+      "Shopify ID": identity.shopifyId || legacyAlias || undefined,
+      Email: identity.email || undefined,
+      "First Name": identity.firstName || undefined,
+      "Last Name": identity.lastName || undefined,
+      Phone: identity.phone || undefined,
+    }
+  );
+
+  return {
+    customerRecordId: created.id,
+    created: true,
+    recovered: true,
+  };
+};

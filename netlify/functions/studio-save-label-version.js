@@ -21,6 +21,7 @@ import {
   createResilient,
   updateResilient,
   getRecordOrNull,
+  resolveCustomerRecordIdOrCreate,
   mapErrorResponse,
 } from "./_lib/studio.js";
 
@@ -134,6 +135,7 @@ export const createStudioSaveLabelVersionHandler = ({
   createResilientImpl = createResilient,
   updateResilientImpl = updateResilient,
   computeNextVersionNumberImpl = computeNextVersionNumber,
+  resolveCustomerRecordIdOrCreateImpl = resolveCustomerRecordIdOrCreate,
   mapErrorResponseImpl = mapErrorResponse,
 } = {}) =>
   async (arg, { qs = {}, isV2, method }) => {
@@ -141,7 +143,7 @@ export const createStudioSaveLabelVersionHandler = ({
       const body = (await parseBodyImpl(arg, method, isV2)) || {};
       assertPayloadSizeImpl(body);
 
-      const customerRecordId = normalizeRecordId(
+      const providedCustomerRecordId = normalizeRecordId(
         firstNonEmpty(
           body.customer_record_id,
           body.customerRecordId,
@@ -152,7 +154,7 @@ export const createStudioSaveLabelVersionHandler = ({
           qs.customer_id
         )
       );
-      if (!customerRecordId) {
+      if (!providedCustomerRecordId) {
         return sendJsonImpl(400, {
           ok: false,
           error: "missing_customer_record_id",
@@ -201,6 +203,19 @@ export const createStudioSaveLabelVersionHandler = ({
         body.force_new_label_head ?? body.forceNewLabelHead,
         false
       );
+      const customerResolution = await resolveCustomerRecordIdOrCreateImpl({
+        providedCustomerRecordId,
+        body,
+        qs,
+      });
+      const customerRecordId = normalizeRecordId(customerResolution?.customerRecordId);
+      if (!customerRecordId) {
+        return sendJsonImpl(400, {
+          ok: false,
+          error: "missing_customer_record_id",
+          message: "A valid Airtable customer record id is required.",
+        });
+      }
 
       const requestedLabelRecordId = normalizeRecordId(
         firstNonEmpty(body.label_record_id, body.labelRecordId, body.current_label_record_id)
@@ -447,6 +462,7 @@ export const createStudioSaveLabelVersionHandler = ({
       return sendJsonImpl(200, {
         ok: true,
         customer_record_id: customerRecordId,
+        customer_record_recovered: Boolean(customerResolution?.recovered),
         session_id: resolvedSessionId || null,
         side,
         version_kind: versionKind,

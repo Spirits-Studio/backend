@@ -117,6 +117,17 @@ test("studio-save-configuration persists links and session contract", async () =
   const fetchMock = installFetchSequence([
     {
       method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerA",
+      response: {
+        id: "recCustomerA",
+        fields: {
+          "Shopify ID": "12345",
+        },
+      },
+    },
+    {
+      method: "GET",
       table: STUDIO_TABLES.labelVersions,
       recordId: "recVersionFrontA",
       response: {
@@ -266,6 +277,15 @@ test("studio-save-configuration persists links and session contract", async () =
 test("studio-save-configuration maps lite closure and default no-wax value", async () => {
   const fetchMock = installFetchSequence([
     {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerA",
+      response: {
+        id: "recCustomerA",
+        fields: {},
+      },
+    },
+    {
       method: "POST",
       table: STUDIO_TABLES.savedConfigurations,
       assert: (call) => {
@@ -310,6 +330,89 @@ test("studio-save-configuration maps lite closure and default no-wax value", asy
     const payload = await response.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.saved_configuration_record_id, "recSavedConfigurationLiteA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("studio-save-configuration recovers missing customer records by creating a replacement", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerLegacyA",
+      status: 404,
+      response: { error: { message: "NOT_FOUND" } },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.match(formula, /legacy_airtable_record:recCustomerLegacyA/);
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(
+          fields["Shopify ID"],
+          "legacy_airtable_record:recCustomerLegacyA"
+        );
+      },
+      response: {
+        records: [{ id: "recCustomerRecoveredA", fields: {} }],
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
+          "recCustomerRecoveredA",
+        ]);
+      },
+      response: {
+        records: [
+          {
+            id: "recSavedConfigurationRecoveredA",
+            fields: {
+              [STUDIO_FIELDS.savedConfigurations.configurationId]: "CFG-RECOVER-1",
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  try {
+    const response = await studioSaveConfiguration(
+      createProxyEvent({
+        method: "POST",
+        body: {
+          customer_record_id: "recCustomerLegacyA",
+          status: "Saved",
+          snapshot: {
+            bottle: { name: "Outlaw" },
+            liquid: { name: "Pink Gin" },
+            closure: { name: "Ebony" },
+          },
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.customer_record_id, "recCustomerRecoveredA");
+    assert.equal(payload.customer_record_recovered, true);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

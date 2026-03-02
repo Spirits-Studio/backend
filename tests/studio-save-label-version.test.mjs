@@ -19,8 +19,17 @@ const baseBody = () => ({
   output_image_url: "https://example.com/output.png",
 });
 
+const createHandler = (overrides = {}) =>
+  createStudioSaveLabelVersionHandler({
+    resolveCustomerRecordIdOrCreateImpl: async ({ providedCustomerRecordId }) => ({
+      customerRecordId: providedCustomerRecordId,
+      recovered: false,
+    }),
+    ...overrides,
+  });
+
 test("explicit label id path rejects label owned by another customer", async () => {
-  const handler = createStudioSaveLabelVersionHandler({
+  const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
       label_record_id: "recLabelOther",
@@ -45,7 +54,7 @@ test("explicit label id path rejects label owned by another customer", async () 
 });
 
 test("inferred label path rejects previous version linked to another customer's label", async () => {
-  const handler = createStudioSaveLabelVersionHandler({
+  const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
       previous_label_version_record_id: "recPrevOther",
@@ -85,7 +94,7 @@ test("inferred label path allows same-customer fork/edit", async () => {
   const createCalls = [];
   const updateCalls = [];
 
-  const handler = createStudioSaveLabelVersionHandler({
+  const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
       previous_label_version_record_id: "recPrevOwned",
@@ -164,7 +173,7 @@ test("rejected attempts are not persisted", async () => {
   let createCalls = 0;
   let updateCalls = 0;
 
-  const handler = createStudioSaveLabelVersionHandler({
+  const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
       accepted: false,
@@ -192,7 +201,7 @@ test("inferred label path backfills session id from linked label when omitted", 
   const createCalls = [];
   const updateCalls = [];
 
-  const handler = createStudioSaveLabelVersionHandler({
+  const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
       previous_label_version_record_id: "recPrevOwned",
@@ -254,7 +263,7 @@ test("inferred label path backfills session id from linked label when omitted", 
 });
 
 test("rejects data-url input_logo_url blobs", async () => {
-  const handler = createStudioSaveLabelVersionHandler({
+  const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
       input_logo_url: "data:image/png;base64,AAAABBBB",
@@ -283,7 +292,7 @@ test("rejects data-url input_logo_url blobs", async () => {
 test("persists valid input logo/character URL pointers", async () => {
   const createCalls = [];
 
-  const handler = createStudioSaveLabelVersionHandler({
+  const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
       input_logo_url: "https://cdn.example.com/logo.png",
@@ -325,5 +334,60 @@ test("persists valid input logo/character URL pointers", async () => {
   assert.equal(
     versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.inputCharacterUrl],
     "https://cdn.example.com/character.png"
+  );
+});
+
+test("recovers missing customer record id before label/version writes", async () => {
+  const createCalls = [];
+  const resolverCalls = [];
+
+  const handler = createHandler({
+    parseBodyImpl: async () => ({
+      ...baseBody(),
+      customer_record_id: "recCustomerLegacyA",
+    }),
+    assertPayloadSizeImpl: () => {},
+    sendJsonImpl: sendJsonForTests,
+    resolveCustomerRecordIdOrCreateImpl: async (input) => {
+      resolverCalls.push(input);
+      return {
+        customerRecordId: "recCustomerRecoveredA",
+        recovered: true,
+      };
+    },
+    getRecordOrNullImpl: async () => null,
+    computeNextVersionNumberImpl: async () => 1,
+    createResilientImpl: async (table, requiredFields, optionalFields) => {
+      createCalls.push({ table, requiredFields, optionalFields });
+      if (table === STUDIO_TABLES.labels) {
+        return {
+          id: "recLabelRecoveredA",
+          fields: {
+            [STUDIO_FIELDS.labels.customers]: ["recCustomerRecoveredA"],
+            [STUDIO_FIELDS.labels.labelVersions]: [],
+          },
+          createdTime: "2026-02-26T00:00:00.000Z",
+        };
+      }
+      if (table === STUDIO_TABLES.labelVersions) {
+        return { id: "recVersionRecoveredA", createdTime: "2026-02-26T01:00:00.000Z" };
+      }
+      throw new Error(`Unexpected create: ${table}`);
+    },
+    updateResilientImpl: async () => ({ id: "recLabelRecoveredA" }),
+  });
+
+  const result = await handler({}, { qs: {}, isV2: false, method: "POST" });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.customer_record_id, "recCustomerRecoveredA");
+  assert.equal(result.body.customer_record_recovered, true);
+  assert.equal(resolverCalls.length, 1);
+  assert.equal(resolverCalls[0].providedCustomerRecordId, "recCustomerLegacyA");
+
+  const labelCreate = createCalls.find((row) => row.table === STUDIO_TABLES.labels);
+  assert.ok(labelCreate, "Expected a label create call");
+  assert.deepEqual(
+    labelCreate.optionalFields[STUDIO_FIELDS.labels.customers],
+    ["recCustomerRecoveredA"]
   );
 });

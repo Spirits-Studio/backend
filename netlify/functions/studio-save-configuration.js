@@ -19,6 +19,7 @@ import {
   createResilient,
   updateResilient,
   getRecordOrNull,
+  resolveCustomerRecordIdOrCreate,
   mapErrorResponse,
 } from "./_lib/studio.js";
 
@@ -151,7 +152,7 @@ export default withShopifyProxy(
       const body = (await parseBody(arg, method, isV2)) || {};
       assertPayloadSize(body);
 
-      const customerRecordId = normalizeRecordId(
+      const providedCustomerRecordId = normalizeRecordId(
         firstNonEmpty(
           body.customer_record_id,
           body.customerRecordId,
@@ -161,6 +162,21 @@ export default withShopifyProxy(
           qs.customer_record_id,
           qs.customer_id
         )
+      );
+      if (!providedCustomerRecordId) {
+        return sendJson(400, {
+          ok: false,
+          error: "missing_customer_record_id",
+          message: "A valid Airtable customer record id is required.",
+        });
+      }
+      const customerResolution = await resolveCustomerRecordIdOrCreate({
+        providedCustomerRecordId,
+        body,
+        qs,
+      });
+      const customerRecordId = normalizeRecordId(
+        customerResolution?.customerRecordId
       );
       if (!customerRecordId) {
         return sendJson(400, {
@@ -598,6 +614,7 @@ export default withShopifyProxy(
         configuration_id:
           record.fields?.[STUDIO_FIELDS.savedConfigurations.configurationId] || null,
         customer_record_id: customerRecordId,
+        customer_record_recovered: Boolean(customerResolution?.recovered),
         session_id: sessionId || null,
         label_front_record_id: frontLabelId || null,
         label_back_record_id: backLabelId || null,

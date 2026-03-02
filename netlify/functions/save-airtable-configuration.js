@@ -1,5 +1,11 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { findOneBy, createOne, updateOne } from "../../src/lib/airtable.js";
+import { createOne } from "../../src/lib/airtable.js";
+import {
+  firstNonEmpty,
+  normalizeRecordId,
+  resolveCustomerRecordIdOrCreate,
+  toLinkedRecordArray,
+} from "./_lib/studio.js";
 
 const send = (status, obj) =>
   new Response(JSON.stringify(obj), {
@@ -38,7 +44,25 @@ export default withShopifyProxy(
 
       console.log("body", body)
       
-      const customer_id = body.customer_id || null;
+      const providedCustomerRecordId = normalizeRecordId(
+        firstNonEmpty(
+          body.customer_record_id,
+          body.customerRecordId,
+          body.customer_id,
+          qs.customer_record_id,
+          qs.customer_id
+        )
+      );
+      const customerResolution = providedCustomerRecordId
+        ? await resolveCustomerRecordIdOrCreate({
+            providedCustomerRecordId,
+            body,
+            qs,
+          })
+        : null;
+      const customerRecordId = normalizeRecordId(
+        customerResolution?.customerRecordId
+      );
       const shopify_variant_id = body.shopify_variant_id || null;
       const internal_sku = body.internal_sku || null;
       const liquor = body.liquor || null;
@@ -49,10 +73,8 @@ export default withShopifyProxy(
       const front_label = body.front_label || null;
       const back_label = body.back_label || null;
              
-      let record = null;
-
       const created = await createOne(process.env.AIRTABLE_SAVED_CONFIGS_TABLE_ID, {
-        "Customer": [customer_id] || undefined,
+        "Customer": toLinkedRecordArray(customerRecordId),
         "Configurator Tool": "Zakeke",
         "Alcohol Selection": liquor || undefined,
         "Bottle Selection": bottle  || undefined,
@@ -75,6 +97,8 @@ export default withShopifyProxy(
         ok: true,
         created: true,
         airtableId: created.id,
+        customer_record_id: customerRecordId || null,
+        customer_record_recovered: Boolean(customerResolution?.recovered),
         fields: created.fields
       });
 
