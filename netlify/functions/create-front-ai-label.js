@@ -104,6 +104,17 @@ function normalizeHex(hex = '') {
   return m ? (s.startsWith('#') ? s : `#${s}`) : '';
 }
 
+function parseBoolean(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "on"].includes(normalized)) return true;
+    if (["0", "false", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
 function dataUrlToInlineData(dataUrl) {
   try {
     const [, meta, b64] = dataUrl.match(/^data:(.*?);base64,(.*)$/) || [];
@@ -548,6 +559,10 @@ async function main(arg, { qs, method }) {
     const hasPreviousImage = Boolean(previousImageInline);
     const qsDebug = qs?.debug;
     debugOn = qsDebug === '1' || qsDebug === 'true' || body.debug === true;
+    const minimalResponse = parseBoolean(
+      body.minimalResponse ?? qs.minimalResponse ?? body.minimal ?? qs.minimal,
+      false
+    );
     
     // Reset collector per-invocation
     debugImages.length = 0;
@@ -590,6 +605,7 @@ async function main(arg, { qs, method }) {
           critiquePreview: critique ? String(critique).slice(0, 160) : "",
           critique,
           debug: false,
+          minimalResponse,
         });
 
     if (!dims) {
@@ -819,6 +835,14 @@ async function main(arg, { qs, method }) {
     // //
     // // Code removed for now per request
 
+    const includeDataUrls = !minimalResponse;
+    const responseImages = includeDataUrls
+      ? images
+      : (frontS3Url ? [frontS3Url] : []);
+    const responseFrontImage = includeDataUrls
+      ? firstImage
+      : (frontS3Url || firstImage || "");
+
     const responsePayload = {
         message: "AI image generated successfully",
         model: modelId,
@@ -826,9 +850,9 @@ async function main(arg, { qs, method }) {
         designSide: 'front',
         width_mm: dims.width,
         height_mm: dims.height,
-        // base64 for preview
-        images,
-        frontImage: firstImage,
+        // For minimal mode, return URL references to keep payload small.
+        images: responseImages,
+        frontImage: responseFrontImage,
         // S3 results
         s3Uploads: uploaded,
         frontS3Url,
@@ -840,6 +864,7 @@ async function main(arg, { qs, method }) {
 
     return {
       statusCode: 200,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(responsePayload),
     };
   } catch (err) {
