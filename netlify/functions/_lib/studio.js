@@ -398,6 +398,31 @@ const sanitizeCustomerIdentityValue = (value, maxLen = 255) => {
   return text.slice(0, maxLen);
 };
 
+const parseAirtableErrorType = (error) => {
+  const responseText = String(error?.responseText || "");
+  if (!responseText) return null;
+  try {
+    const parsed = JSON.parse(responseText);
+    return String(parsed?.error?.type || "").trim() || null;
+  } catch {
+    return null;
+  }
+};
+
+const isAirtableLookupRecoverableError = (error) => {
+  const status = Number(error?.status || 0);
+  if (status === 404) return true;
+  if (status !== 403) return false;
+
+  const airtableType = parseAirtableErrorType(error);
+  if (airtableType === "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND") return true;
+
+  const message = String(error?.message || "");
+  if (/INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND/i.test(message)) return true;
+
+  return false;
+};
+
 const normalizeShopifyIdValue = (value) => {
   const text = sanitizeCustomerIdentityValue(value, 255);
   if (!text) return null;
@@ -471,8 +496,18 @@ const resolveCustomerIdentity = ({ body = {}, qs = {} } = {}) => {
 const findCustomerByField = async (fieldName, value) => {
   const text = sanitizeCustomerIdentityValue(value, 255);
   if (!text) return null;
-  const record = await findOneBy(STUDIO_TABLES.customers, fieldName, text);
-  return record?.id ? record : null;
+  try {
+    const record = await findOneBy(STUDIO_TABLES.customers, fieldName, text);
+    return record?.id ? record : null;
+  } catch (error) {
+    if (!isAirtableLookupRecoverableError(error)) throw error;
+    console.warn("[studio] customer lookup skipped", {
+      fieldName,
+      status: error?.status,
+      errorType: parseAirtableErrorType(error),
+    });
+    return null;
+  }
 };
 
 export const resolveCustomerRecordIdOrCreate = async ({
@@ -482,7 +517,18 @@ export const resolveCustomerRecordIdOrCreate = async ({
 } = {}) => {
   const providedRecordId = normalizeRecordId(providedCustomerRecordId);
   if (providedRecordId) {
-    const existing = await getRecordOrNull(STUDIO_TABLES.customers, providedRecordId);
+    let existing = null;
+    try {
+      existing = await getRecordOrNull(STUDIO_TABLES.customers, providedRecordId);
+    } catch (error) {
+      if (!isAirtableLookupRecoverableError(error)) throw error;
+      console.warn("[studio] provided customer record lookup failed; attempting recovery", {
+        providedRecordId,
+        status: error?.status,
+        errorType: parseAirtableErrorType(error),
+      });
+      existing = null;
+    }
     if (existing?.id) {
       return {
         customerRecordId: existing.id,
