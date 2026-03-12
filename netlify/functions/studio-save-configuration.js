@@ -78,10 +78,42 @@ const WAX_CHOICES = [
   "Brilliant White",
   "Smokey Black",
 ];
+const ALCOHOL_TYPES = {
+  gin: "Gin",
+  vodka: "Vodka",
+  whisky: "Whisky",
+  rum: "Rum",
+};
+const LIQUID_TO_ALCOHOL = new Map([
+  ["wild berry gin", ALCOHOL_TYPES.gin],
+  ["winter berry gin", ALCOHOL_TYPES.gin],
+  ["contemporary gin", ALCOHOL_TYPES.gin],
+  ["citrus gin", ALCOHOL_TYPES.gin],
+  ["pink gin", ALCOHOL_TYPES.gin],
+  ["classic gin", ALCOHOL_TYPES.gin],
+  ["london dry gin", ALCOHOL_TYPES.gin],
+  ["triple distilled vodka", ALCOHOL_TYPES.vodka],
+  ["standard vodka", ALCOHOL_TYPES.vodka],
+  ["vanilla vodka", ALCOHOL_TYPES.vodka],
+  ["honey vodka", ALCOHOL_TYPES.vodka],
+  ["citrus vodka", ALCOHOL_TYPES.vodka],
+  ["bourbon", ALCOHOL_TYPES.whisky],
+  ["scotch", ALCOHOL_TYPES.whisky],
+  ["aged rum", ALCOHOL_TYPES.rum],
+  ["spiced rum", ALCOHOL_TYPES.rum],
+  ["white rum", ALCOHOL_TYPES.rum],
+]);
 const WOOD_CLOSURE_BY_LOWER = new Map(
   WOOD_CLOSURE_CHOICES.map((choice) => [choice.toLowerCase(), choice])
 );
 const WAX_BY_LOWER = new Map(WAX_CHOICES.map((choice) => [choice.toLowerCase(), choice]));
+const ALCOHOL_BY_LOWER = new Map([
+  ["gin", ALCOHOL_TYPES.gin],
+  ["vodka", ALCOHOL_TYPES.vodka],
+  ["whisky", ALCOHOL_TYPES.whisky],
+  ["whiskey", ALCOHOL_TYPES.whisky],
+  ["rum", ALCOHOL_TYPES.rum],
+]);
 
 const normalizeChoice = (value, map) => {
   const raw = sanitizeText(value, 120);
@@ -110,6 +142,21 @@ const normalizeWaxSelection = (value) => {
     return WAX_BY_LOWER.get(fromPrefixed.toLowerCase()) || undefined;
   }
   return WAX_BY_LOWER.get(raw.toLowerCase()) || undefined;
+};
+
+const normalizeAlcoholSelection = (value) => {
+  const raw = sanitizeText(value, 120);
+  if (!raw) return undefined;
+  const lowered = raw.toLowerCase();
+  if (ALCOHOL_BY_LOWER.has(lowered)) return ALCOHOL_BY_LOWER.get(lowered);
+  if (LIQUID_TO_ALCOHOL.has(lowered)) return LIQUID_TO_ALCOHOL.get(lowered);
+  if (/\bvodka\b/i.test(lowered)) return ALCOHOL_TYPES.vodka;
+  if (/\bgin\b/i.test(lowered)) return ALCOHOL_TYPES.gin;
+  if (/\brum\b/i.test(lowered)) return ALCOHOL_TYPES.rum;
+  if (/\bwhisk(?:e)?y\b|\bbourbon\b|\bscotch\b/i.test(lowered)) {
+    return ALCOHOL_TYPES.whisky;
+  }
+  return undefined;
 };
 
 const resolveClosureSelection = ({
@@ -145,6 +192,18 @@ const resolveWaxSelection = ({
   }
   return undefined;
 };
+
+const resolveAlcoholSelection = ({
+  alcoholSelection,
+  snapshotAlcoholName,
+  snapshotLiquorName,
+  snapshotLiquidName,
+}) =>
+  normalizeAlcoholSelection(alcoholSelection) ||
+  normalizeAlcoholSelection(snapshotAlcoholName) ||
+  normalizeAlcoholSelection(snapshotLiquorName) ||
+  normalizeAlcoholSelection(snapshotLiquidName) ||
+  undefined;
 
 export default withShopifyProxy(
   async (arg, { qs, isV2, method }) => {
@@ -361,6 +420,19 @@ export default withShopifyProxy(
         ? await getRecordOrNull(STUDIO_TABLES.labels, backLabelId)
         : null;
 
+      const allLabelVersionIds = Array.from(
+        new Set(
+          [
+            frontVersionId,
+            backVersionId,
+            ...getLinkedIds(frontLabelRecord, STUDIO_FIELDS.labels.labelVersions),
+            ...getLinkedIds(backLabelRecord, STUDIO_FIELDS.labels.labelVersions),
+          ]
+            .map((id) => normalizeRecordId(id))
+            .filter(Boolean)
+        )
+      );
+
       const sessionId = resolveSessionId(
         requestedSessionId,
         existingRecord?.fields?.[STUDIO_FIELDS.savedConfigurations.sessionId],
@@ -428,6 +500,19 @@ export default withShopifyProxy(
         snapshotClosureName: snapshot?.closure?.name,
         closureOptionLabel,
       });
+      const normalizedAlcoholSelection = resolveAlcoholSelection({
+        alcoholSelection: firstNonEmpty(
+          body.alcohol_selection,
+          body.alcoholSelection
+        ),
+        snapshotAlcoholName: firstNonEmpty(
+          snapshot?.alcohol?.name,
+          snapshot?.alcoholSelection,
+          snapshot?.alcohol_selection
+        ),
+        snapshotLiquorName: firstNonEmpty(snapshot?.liquor),
+        snapshotLiquidName: firstNonEmpty(snapshot?.liquid?.name),
+      });
 
       const sharedRequiredFields = {
         [STUDIO_FIELDS.savedConfigurations.customer]: toLinkedRecordArray(
@@ -441,6 +526,9 @@ export default withShopifyProxy(
         [STUDIO_FIELDS.savedConfigurations.displayName]: displayName,
         [STUDIO_FIELDS.savedConfigurations.status]: status,
         [STUDIO_FIELDS.savedConfigurations.sessionId]: sessionId || undefined,
+        [STUDIO_FIELDS.savedConfigurations.previewImage]: previewUrl
+          ? [{ url: previewUrl }]
+          : undefined,
         [STUDIO_FIELDS.savedConfigurations.previewImageUrl]: previewUrl,
         [STUDIO_FIELDS.savedConfigurations.internalSku]: sanitizeText(
           firstNonEmpty(
@@ -459,10 +547,8 @@ export default withShopifyProxy(
           ),
           255
         ),
-        [STUDIO_FIELDS.savedConfigurations.alcoholSelection]: sanitizeText(
-          firstNonEmpty(body.alcohol_selection, body.alcoholSelection, snapshot.liquor),
-          120
-        ),
+        [STUDIO_FIELDS.savedConfigurations.alcoholSelection]:
+          normalizedAlcoholSelection,
         [STUDIO_FIELDS.savedConfigurations.bottleSelection]: sanitizeText(
           firstNonEmpty(body.bottle_selection, body.bottleSelection, snapshot?.bottle?.name),
           120
@@ -479,6 +565,9 @@ export default withShopifyProxy(
         [STUDIO_FIELDS.savedConfigurations.labels]: toLinkedRecordArray(
           frontLabelId,
           backLabelId
+        ),
+        [STUDIO_FIELDS.savedConfigurations.labelVersions]: toLinkedRecordArray(
+          ...allLabelVersionIds
         ),
         ...buildLinkedPatch(
           existingRecord,
@@ -564,10 +653,7 @@ export default withShopifyProxy(
         );
       };
 
-      const linkVersionToSavedConfiguration = async (
-        versionRecordId,
-        sideLabelRecord
-      ) => {
+      const linkVersionToSavedConfiguration = async (versionRecordId) => {
         if (!versionRecordId) return;
         const versionRecord = await getRecordOrNull(
           STUDIO_TABLES.labelVersions,
@@ -585,6 +671,16 @@ export default withShopifyProxy(
             record.id,
           ])
         );
+        const mergedConfigLinks = toLinkedRecordArray(...mergedConfigIds);
+        const versionLabelRecordId =
+          getLinkedIds(versionRecord, STUDIO_FIELDS.labelVersions.labels)[0] || null;
+        const sideLabelRecord =
+          (frontLabelRecord && frontLabelRecord.id === versionLabelRecordId
+            ? frontLabelRecord
+            : null) ||
+          (backLabelRecord && backLabelRecord.id === versionLabelRecordId
+            ? backLabelRecord
+            : null);
         const versionSessionId = resolveSessionId(
           sessionId,
           versionRecord.fields?.[STUDIO_FIELDS.labelVersions.sessionId],
@@ -595,14 +691,8 @@ export default withShopifyProxy(
           versionRecord.id,
           {},
           {
-            ...buildLinkedPatch(
-              versionRecord,
-              STUDIO_FIELDS.labelVersions.savedConfigurations,
-              mergedConfigIds,
-              {
-                fallbackFieldNames,
-              }
-            ),
+            [STUDIO_FIELDS.labelVersions.savedConfigurations]:
+              mergedConfigLinks || undefined,
             [STUDIO_FIELDS.labelVersions.sessionId]: versionSessionId || undefined,
           }
         );
@@ -610,8 +700,9 @@ export default withShopifyProxy(
 
       await linkConfigToLabel(frontLabelId, frontVersionId, "front");
       await linkConfigToLabel(backLabelId, backVersionId, "back");
-      await linkVersionToSavedConfiguration(frontVersionId, frontLabelRecord);
-      await linkVersionToSavedConfiguration(backVersionId, backLabelRecord);
+      for (const versionRecordId of allLabelVersionIds) {
+        await linkVersionToSavedConfiguration(versionRecordId);
+      }
 
       return sendJson(200, {
         ok: true,

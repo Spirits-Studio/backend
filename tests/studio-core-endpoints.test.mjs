@@ -274,6 +274,252 @@ test("studio-save-configuration persists links and session contract", async () =
   }
 });
 
+test("studio-save-configuration links all label versions and maps preview/alcohol fields", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerA",
+      response: {
+        id: "recCustomerA",
+        fields: {},
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recVersionFrontCurrent",
+      response: {
+        id: "recVersionFrontCurrent",
+        fields: {
+          [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+          [STUDIO_FIELDS.labelVersions.labels]: ["recLabelFrontA"],
+          [STUDIO_FIELDS.labelVersions.sessionId]: "session-current",
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labels,
+      recordId: "recLabelFrontA",
+      response: {
+        id: "recLabelFrontA",
+        fields: {
+          [STUDIO_FIELDS.labels.customers]: ["recCustomerA"],
+          [STUDIO_FIELDS.labels.savedConfigurations]: [],
+          [STUDIO_FIELDS.labels.sessionId]: "session-from-label",
+          [STUDIO_FIELDS.labels.labelVersions]: [
+            "recVersionFrontPrev",
+            "recVersionFrontCurrent",
+          ],
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labels,
+      recordId: "recLabelFrontA",
+      response: {
+        id: "recLabelFrontA",
+        fields: {
+          [STUDIO_FIELDS.labels.customers]: ["recCustomerA"],
+          [STUDIO_FIELDS.labels.savedConfigurations]: [],
+          [STUDIO_FIELDS.labels.sessionId]: "session-from-label",
+          [STUDIO_FIELDS.labels.labelVersions]: [
+            "recVersionFrontPrev",
+            "recVersionFrontCurrent",
+          ],
+        },
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(
+          fields[STUDIO_FIELDS.savedConfigurations.alcoholSelection],
+          "Vodka"
+        );
+        assert.equal(
+          fields[STUDIO_FIELDS.savedConfigurations.previewImageUrl],
+          "https://files.example.com/preview.png"
+        );
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.previewImage], [
+          { url: "https://files.example.com/preview.png" },
+        ]);
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.labels], [
+          "recLabelFrontA",
+        ]);
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.labelVersions], [
+          "recVersionFrontCurrent",
+          "recVersionFrontPrev",
+        ]);
+      },
+      response: {
+        records: [
+          {
+            id: "recSavedConfigurationAllVersionsA",
+            createdTime: "2026-03-01T10:00:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.savedConfigurations.configurationId]: "CFG-ALL-VERSIONS-1",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labels,
+      response: { records: [{ id: "recLabelFrontA" }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recVersionFrontCurrent",
+      response: {
+        id: "recVersionFrontCurrent",
+        fields: {
+          [STUDIO_FIELDS.labelVersions.labels]: ["recLabelFrontA"],
+          [STUDIO_FIELDS.labelVersions.savedConfigurations]: [],
+          [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labelVersions,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.labelVersions.savedConfigurations], [
+          "recSavedConfigurationAllVersionsA",
+        ]);
+      },
+      response: { records: [{ id: "recVersionFrontCurrent" }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recVersionFrontPrev",
+      response: {
+        id: "recVersionFrontPrev",
+        fields: {
+          [STUDIO_FIELDS.labelVersions.labels]: ["recLabelFrontA"],
+          [STUDIO_FIELDS.labelVersions.savedConfigurations]: [],
+          [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labelVersions,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.labelVersions.savedConfigurations], [
+          "recSavedConfigurationAllVersionsA",
+        ]);
+      },
+      response: { records: [{ id: "recVersionFrontPrev" }] },
+    },
+  ]);
+
+  try {
+    const response = await studioSaveConfiguration(
+      createProxyEvent({
+        method: "POST",
+        body: {
+          customer_record_id: "recCustomerA",
+          session_id: "session-save-order",
+          status: "Saved",
+          preview_url: "https://files.example.com/preview.png",
+          label_front_version_id: "recVersionFrontCurrent",
+          snapshot: {
+            bottle: { name: "Antica" },
+            liquid: { name: "Triple Distilled Vodka" },
+            closure: { name: "Beech" },
+          },
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(
+      payload.saved_configuration_record_id,
+      "recSavedConfigurationAllVersionsA"
+    );
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("studio-save-configuration resolves whisky from liquid mapping", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerA",
+      response: {
+        id: "recCustomerA",
+        fields: {},
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(
+          fields[STUDIO_FIELDS.savedConfigurations.alcoholSelection],
+          "Whisky"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recSavedConfigurationWhiskyA",
+            createdTime: "2026-03-01T11:00:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.savedConfigurations.configurationId]: "CFG-WHISKY-1",
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  try {
+    const response = await studioSaveConfiguration(
+      createProxyEvent({
+        method: "POST",
+        body: {
+          customer_record_id: "recCustomerA",
+          session_id: "session-whisky-123",
+          status: "Saved",
+          snapshot: {
+            bottle: { name: "Outlaw" },
+            liquid: { name: "Bourbon" },
+            closure: { name: "Ebony" },
+          },
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(
+      payload.saved_configuration_record_id,
+      "recSavedConfigurationWhiskyA"
+    );
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("studio-save-configuration maps lite closure and default no-wax value", async () => {
   const fetchMock = installFetchSequence([
     {
