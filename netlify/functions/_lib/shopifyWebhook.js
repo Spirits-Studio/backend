@@ -1,0 +1,318 @@
+import crypto from "crypto";
+import { findOneBy } from "../../../src/lib/airtable.js";
+import { createResilient, updateResilient } from "./studio.js";
+
+export const SHOPIFY_WEBHOOK_HEADERS = {
+  topic: "x-shopify-topic",
+  shopDomain: "x-shopify-shop-domain",
+  webhookId: "x-shopify-webhook-id",
+  hmac: "x-shopify-hmac-sha256",
+};
+
+export const WEBHOOK_EVENTS_TABLE =
+  process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID || "Webhook Events";
+
+const IDEMPOTENCY_STATUS = {
+  received: "received",
+  processed: "processed",
+  skipped: "skipped",
+  error: "error",
+};
+
+const terminalIdempotentStatuses = new Set([
+  IDEMPOTENCY_STATUS.processed,
+  IDEMPOTENCY_STATUS.skipped,
+]);
+
+const normalizeIdempotencyStatus = (value) => {
+  const text = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!text) return null;
+  return text;
+};
+
+const webhookLogDefaults = {
+  topic: null,
+  webhook_id: null,
+  shop_domain: null,
+  order_id: null,
+  shopify_customer_id: null,
+  email: null,
+  canonical_customer_record_id: null,
+  merge_candidates_count: 0,
+  relinked_saved_configs: 0,
+  relinked_labels: 0,
+  relinked_orders: 0,
+  idempotent_skip: false,
+  status: null,
+  error: null,
+};
+
+const toPlainHeaderValue = (value) => {
+  if (Array.isArray(value)) return String(value[0] ?? "").trim();
+  return String(value ?? "").trim();
+};
+
+export const normalizeWebhookHeaders = (headersInput = {}) => {
+  const out = {};
+
+  if (typeof headersInput?.forEach === "function") {
+    headersInput.forEach((value, key) => {
+      out[String(key || "").toLowerCase()] = toPlainHeaderValue(value);
+    });
+    return out;
+  }
+
+  Object.entries(headersInput || {}).forEach(([key, value]) => {
+    out[String(key || "").toLowerCase()] = toPlainHeaderValue(value);
+  });
+  return out;
+};
+
+export const readWebhookRawBody = async (req) => {
+  if (typeof req?.body === "string") return req.body;
+  if (Buffer.isBuffer(req?.body)) return req.body.toString("utf8");
+  if (typeof req?.rawBody === "string") return req.rawBody;
+  if (Buffer.isBuffer(req?.rawBody)) return req.rawBody.toString("utf8");
+
+  const chunks = [];
+  for await (const chunk of req || []) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk || "")));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+};
+
+export const parseWebhookEnvelope = async (req) => {
+  const headers = normalizeWebhookHeaders(req?.headers || {});
+  const rawBody = (await readWebhookRawBody(req)) || "";
+
+  let payload = {};
+  let parseError = null;
+  if (rawBody) {
+    try {
+      payload = JSON.parse(rawBody);
+    } catch (error) {
+      parseError = error;
+      payload = {};
+    }
+  }
+
+  const topic = headers[SHOPIFY_WEBHOOK_HEADERS.topic] || null;
+  const shopDomain = headers[SHOPIFY_WEBHOOK_HEADERS.shopDomain] || null;
+  const webhookId = headers[SHOPIFY_WEBHOOK_HEADERS.webhookId] || null;
+  const hmac = headers[SHOPIFY_WEBHOOK_HEADERS.hmac] || null;
+
+  return {
+    headers,
+    rawBody,
+    payload,
+    parseError,
+    topic,
+    shop_domain: shopDomain,
+    webhook_id: webhookId,
+    hmac,
+    received_at: new Date().toISOString(),
+  };
+};
+
+const toBase64Buffer = (value) => {
+  try {
+    return Buffer.from(String(value || ""), "base64");
+  } catch {
+    return Buffer.from("");
+  }
+};
+
+export const verifyWebhookHmac = ({
+  rawBody,
+  providedHmac,
+  secret = process.env.SHOPIFY_WEBHOOK_SECRET,
+}) => {
+  if (!secret || !providedHmac) return false;
+
+  const digest = crypto
+    .createHmac("sha256", secret)
+    .update(rawBody || "", "utf8")
+    .digest("base64");
+
+  const expected = toBase64Buffer(digest);
+  const provided = toBase64Buffer(providedHmac);
+  if (!expected.length || expected.length !== provided.length) return false;
+
+  return crypto.timingSafeEqual(expected, provided);
+};
+
+export const hashWebhookPayload = (rawBody) =>
+  crypto.createHash("sha256").update(rawBody || "", "utf8").digest("hex");
+
+const truncate = (value, maxLen = 2000) => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  return text.length > maxLen ? `${text.slice(0, maxLen - 3)}...` : text;
+};
+
+export const mapWebhookErrorMessage = (error, maxLen = 2000) => {
+  if (!error) return null;
+  return truncate(error?.message || String(error), maxLen);
+};
+
+export const createWebhookLogContext = (seed = {}) => ({
+  ...webhookLogDefaults,
+  ...(seed || {}),
+});
+
+export const createWebhookLogger = (seed = {}) => {
+  let context = createWebhookLogContext(seed);
+
+  const emit = (level, message, extra = {}) => {
+    const payload = {
+      timestamp: new Date().toISOString(),
+      level,
+      message,
+      ...createWebhookLogContext({ ...context, ...(extra || {}) }),
+    };
+
+    if (level === "error") {
+      console.error("[shopify-webhook]", payload);
+      return;
+    }
+    if (level === "warn") {
+      console.warn("[shopify-webhook]", payload);
+      return;
+    }
+    console.log("[shopify-webhook]", payload);
+  };
+
+  return {
+    setContext(patch = {}) {
+      context = createWebhookLogContext({ ...context, ...(patch || {}) });
+      return context;
+    },
+    getContext() {
+      return createWebhookLogContext(context);
+    },
+    info(message, extra = {}) {
+      emit("info", message, extra);
+    },
+    warn(message, extra = {}) {
+      emit("warn", message, extra);
+    },
+    error(message, extra = {}) {
+      emit("error", message, extra);
+    },
+  };
+};
+
+const shouldAttemptIdempotency = () => {
+  const disabled =
+    String(process.env.SHOPIFY_WEBHOOK_IDEMPOTENCY_DISABLED || "")
+      .trim()
+      .toLowerCase() === "true";
+  return !disabled;
+};
+
+export const beginWebhookIdempotency = async ({
+  webhookId,
+  topic,
+  shopDomain,
+  payloadHash,
+  logger,
+}) => {
+  if (!webhookId || !shouldAttemptIdempotency()) {
+    return {
+      enabled: false,
+      skip: false,
+      recordId: null,
+      status: null,
+    };
+  }
+
+  try {
+    const existing = await findOneBy(WEBHOOK_EVENTS_TABLE, "Webhook ID", webhookId);
+    if (existing?.id) {
+      const existingStatus = normalizeIdempotencyStatus(existing?.fields?.Status);
+      if (existingStatus && terminalIdempotentStatuses.has(existingStatus)) {
+        return {
+          enabled: true,
+          skip: true,
+          blocked: false,
+          recordId: existing.id,
+          status: existingStatus,
+        };
+      }
+
+      return {
+        enabled: true,
+        skip: false,
+        blocked: false,
+        recordId: existing.id,
+        status: existingStatus || IDEMPOTENCY_STATUS.received,
+      };
+    }
+
+    const created = await createResilient(
+      WEBHOOK_EVENTS_TABLE,
+      {},
+      {
+        "Webhook ID": webhookId,
+        Topic: topic || undefined,
+        "Shop Domain": shopDomain || undefined,
+        "Payload Hash": payloadHash || undefined,
+        Status: "received",
+      }
+    );
+
+    return {
+      enabled: true,
+      skip: false,
+      blocked: false,
+      recordId: created?.id || null,
+      status: IDEMPOTENCY_STATUS.received,
+    };
+  } catch (error) {
+    logger?.error("idempotency store unavailable; refusing to process webhook", {
+      status: error?.status || null,
+      error: mapWebhookErrorMessage(error),
+    });
+    return {
+      enabled: false,
+      skip: false,
+      blocked: true,
+      recordId: null,
+      status: null,
+      error,
+    };
+  }
+};
+
+export const completeWebhookIdempotency = async ({
+  recordId,
+  status,
+  error,
+  logger,
+}) => {
+  if (!recordId) return;
+
+  try {
+    await updateResilient(
+      WEBHOOK_EVENTS_TABLE,
+      recordId,
+      {},
+      {
+        Status: status || undefined,
+        "Processed At": new Date().toISOString(),
+        Error: mapWebhookErrorMessage(error),
+      }
+    );
+  } catch (updateError) {
+    logger?.warn("idempotency status update failed", {
+      status: updateError?.status || null,
+      error: mapWebhookErrorMessage(updateError),
+    });
+  }
+};
+
+export const sendWebhookJson = (res, status, payload) => {
+  res.status(status).json(payload);
+};
