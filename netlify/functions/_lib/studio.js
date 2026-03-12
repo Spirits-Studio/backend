@@ -54,6 +54,7 @@ export const STUDIO_FIELDS = {
   },
   labelVersions: {
     accepted: "Accepted",
+    bottle: "Bottle",
     designSide: "Design Side",
     editPromptText: "Edit Prompt Text",
     inputCharacterUrl: "Input Character URL",
@@ -63,6 +64,7 @@ export const STUDIO_FIELDS = {
     modelName: "Model Name",
     name: "Name",
     outputImageUrl: "Output Image URL",
+    outputImage: "Output Image",
     outputPdfUrl: "Output PDF URL",
     outputS3Key: "Output S3 Key",
     outputS3Url: "Output S3 URL",

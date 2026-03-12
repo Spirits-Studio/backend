@@ -33,11 +33,38 @@ const toVersionNumber = (value) => {
   return Math.max(1, Math.floor(num));
 };
 
+const deriveS3KeyFromUrl = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = new URL(text);
+    const pathname = String(parsed.pathname || "").replace(/^\/+/, "");
+    if (!pathname) return null;
+    return decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+};
+
 const parsePayloadInputs = (body = {}) => {
   const aiInput =
     body.ai_input && typeof body.ai_input === "object" ? body.ai_input : {};
   const outputs =
     body.outputs && typeof body.outputs === "object" ? body.outputs : {};
+  const order =
+    body.order && typeof body.order === "object" ? body.order : {};
+  const bottle = sanitizeText(
+    firstNonEmpty(
+      body.bottle,
+      body.bottle_name,
+      body.bottleName,
+      order?.bottle?.name,
+      order?.bottleName,
+      order?.bottle,
+      outputs.bottle
+    ),
+    120
+  );
   const rawInputCharacterRef = firstNonEmpty(
     body.input_character_url,
     body.inputCharacterUrl,
@@ -50,8 +77,44 @@ const parsePayloadInputs = (body = {}) => {
   );
   const inputCharacterUrl = sanitizeUrl(rawInputCharacterRef);
   const inputLogoUrl = sanitizeUrl(rawInputLogoRef);
+  const outputImageUrl = sanitizeUrl(
+    firstNonEmpty(
+      body.output_image_url,
+      body.outputImageUrl,
+      body.output_s3_url,
+      body.outputS3Url,
+      outputs.outputImageUrl,
+      outputs.frontImage,
+      outputs.url,
+      outputs.s3url
+    )
+  );
+  const outputS3Url = sanitizeUrl(
+    firstNonEmpty(
+      body.output_s3_url,
+      body.outputS3Url,
+      outputs.s3url,
+      outputs.url,
+      outputImageUrl
+    )
+  );
+  const outputPdfUrl = sanitizeUrl(
+    firstNonEmpty(body.output_pdf_url, body.outputPdfUrl, outputs.outputPdfUrl)
+  );
+  const outputZakekeUrl = sanitizeUrl(
+    firstNonEmpty(
+      body.output_zakeke_url,
+      body.outputZakekeUrl,
+      outputs.outputZakekeUrl,
+      outputs.zakekeUrl,
+      outputImageUrl,
+      outputS3Url
+    )
+  );
+  const derivedS3Key = deriveS3KeyFromUrl(outputS3Url);
 
   return {
+    bottle,
     promptText: sanitizeText(
       firstNonEmpty(
         body.prompt_text,
@@ -85,33 +148,19 @@ const parsePayloadInputs = (body = {}) => {
         outputs.inputReferenceUrl
       )
     ),
-    outputImageUrl: sanitizeUrl(
-      firstNonEmpty(
-        body.output_image_url,
-        body.outputImageUrl,
-        outputs.outputImageUrl,
-        outputs.frontImage,
-        outputs.url,
-        outputs.s3url
-      )
-    ),
-    outputPdfUrl: sanitizeUrl(
-      firstNonEmpty(body.output_pdf_url, body.outputPdfUrl, outputs.outputPdfUrl)
-    ),
+    outputImageUrl,
+    outputPdfUrl,
     outputS3Key: sanitizeText(
-      firstNonEmpty(body.output_s3_key, body.outputS3Key, outputs.outputS3Key),
+      firstNonEmpty(
+        body.output_s3_key,
+        body.outputS3Key,
+        outputs.outputS3Key,
+        derivedS3Key
+      ),
       255
     ),
-    outputS3Url: sanitizeUrl(
-      firstNonEmpty(body.output_s3_url, body.outputS3Url, outputs.s3url, outputs.url)
-    ),
-    outputZakekeUrl: sanitizeUrl(
-      firstNonEmpty(
-        body.output_zakeke_url,
-        body.outputZakekeUrl,
-        outputs.outputZakekeUrl
-      )
-    ),
+    outputS3Url,
+    outputZakekeUrl,
   };
 };
 
@@ -225,7 +274,7 @@ export const createStudioSaveLabelVersionHandler = ({
       const requestedLabelRecordId = normalizeRecordId(
         firstNonEmpty(body.label_record_id, body.labelRecordId, body.current_label_record_id)
       );
-      const previousLabelVersionRecordId = normalizeRecordId(
+      let previousLabelVersionRecordId = normalizeRecordId(
         firstNonEmpty(
           body.previous_label_version_record_id,
           body.previousLabelVersionRecordId,
@@ -345,11 +394,16 @@ export const createStudioSaveLabelVersionHandler = ({
         );
       }
 
+      const labelSessionId = sanitizeText(
+        labelRecord?.fields?.[STUDIO_FIELDS.labels.sessionId],
+        255
+      );
+      const previousVersionSessionId = sanitizeText(
+        previousVersionRecord?.fields?.[STUDIO_FIELDS.labelVersions.sessionId],
+        255
+      );
       const resolvedSessionId = sanitizeText(
-        firstNonEmpty(
-          sessionId,
-          labelRecord?.fields?.[STUDIO_FIELDS.labels.sessionId]
-        ),
+        firstNonEmpty(labelSessionId, previousVersionSessionId, sessionId),
         255
       );
 
@@ -384,7 +438,17 @@ export const createStudioSaveLabelVersionHandler = ({
             "At least one output reference URL is required (output_image_url, output_s3_url, output_zakeke_url, or output_pdf_url).",
         });
       }
-      const versionNumber = await computeNextVersionNumberImpl(labelRecord.id);
+      const previousVersionNumber = toVersionNumber(
+        previousVersionRecord?.fields?.[STUDIO_FIELDS.labelVersions.versionNumber]
+      );
+      const inferredNextFromPrevious = previousVersionNumber
+        ? previousVersionNumber + 1
+        : null;
+      const computedNextVersionNumber = await computeNextVersionNumberImpl(labelRecord.id);
+      const versionNumber = Math.max(
+        inferredNextFromPrevious || 1,
+        toVersionNumber(computedNextVersionNumber) || 1
+      );
       const versionName =
         sanitizeName(firstNonEmpty(body.version_name, body.versionName)) ||
         `${sideToTitle(side)} ${versionKind} v${versionNumber}`;
@@ -399,6 +463,7 @@ export const createStudioSaveLabelVersionHandler = ({
           [STUDIO_FIELDS.labelVersions.accepted]: true,
         },
         {
+          [STUDIO_FIELDS.labelVersions.bottle]: payloadInputs.bottle,
           [STUDIO_FIELDS.labelVersions.name]: versionName,
           [STUDIO_FIELDS.labelVersions.promptText]: payloadInputs.promptText,
           [STUDIO_FIELDS.labelVersions.editPromptText]: payloadInputs.editPromptText,
@@ -414,6 +479,14 @@ export const createStudioSaveLabelVersionHandler = ({
           [STUDIO_FIELDS.labelVersions.outputS3Url]: payloadInputs.outputS3Url,
           [STUDIO_FIELDS.labelVersions.outputZakekeUrl]:
             payloadInputs.outputZakekeUrl,
+          [STUDIO_FIELDS.labelVersions.outputImage]:
+            payloadInputs.outputImageUrl || payloadInputs.outputS3Url
+              ? [
+                  {
+                    url: payloadInputs.outputImageUrl || payloadInputs.outputS3Url,
+                  },
+                ]
+            : undefined,
           [STUDIO_FIELDS.labelVersions.sessionId]:
             resolvedSessionId || undefined,
           [STUDIO_FIELDS.labelVersions.previousLabelVersion]:

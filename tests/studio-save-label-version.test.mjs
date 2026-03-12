@@ -169,6 +169,77 @@ test("inferred label path allows same-customer fork/edit", async () => {
   );
 });
 
+test("edit flow keeps stable session and increments from previous version when lookup lags", async () => {
+  const createCalls = [];
+  const updateCalls = [];
+
+  const handler = createHandler({
+    parseBodyImpl: async () => ({
+      ...baseBody(),
+      previous_label_version_record_id: "recPrevOwned",
+      session_id: "session-from-message",
+    }),
+    assertPayloadSizeImpl: () => {},
+    sendJsonImpl: sendJsonForTests,
+    getRecordOrNullImpl: async (table, recordId) => {
+      if (table === STUDIO_TABLES.labelVersions) {
+        assert.equal(recordId, "recPrevOwned");
+        return {
+          id: "recPrevOwned",
+          fields: {
+            [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+            [STUDIO_FIELDS.labelVersions.labels]: ["recLabelOwned"],
+            [STUDIO_FIELDS.labelVersions.versionNumber]: 1,
+            [STUDIO_FIELDS.labelVersions.sessionId]: "session-from-prev-version",
+          },
+        };
+      }
+      if (table === STUDIO_TABLES.labels) {
+        assert.equal(recordId, "recLabelOwned");
+        return {
+          id: "recLabelOwned",
+          fields: {
+            [STUDIO_FIELDS.labels.customers]: [CUSTOMER_ID],
+            [STUDIO_FIELDS.labels.sessionId]: "session-from-label",
+            [STUDIO_FIELDS.labels.labelVersions]: ["recPrevOwned"],
+          },
+          createdTime: "2026-02-26T00:00:00.000Z",
+        };
+      }
+      throw new Error(`Unexpected lookup: ${table}/${recordId}`);
+    },
+    computeNextVersionNumberImpl: async () => 1,
+    createResilientImpl: async (table, requiredFields, optionalFields) => {
+      createCalls.push({ table, requiredFields, optionalFields });
+      if (table === STUDIO_TABLES.labelVersions) {
+        return { id: "recVersion2", createdTime: "2026-02-26T01:00:00.000Z" };
+      }
+      throw new Error(`Unexpected create: ${table}`);
+    },
+    updateResilientImpl: async (table, recordId, requiredFields, optionalFields) => {
+      updateCalls.push({ table, recordId, requiredFields, optionalFields });
+      return { id: recordId };
+    },
+  });
+
+  const result = await handler({}, { qs: {}, isV2: false, method: "POST" });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.version_number, 2);
+  assert.equal(result.body.session_id, "session-from-label");
+
+  const versionCreate = createCalls.find((row) => row.table === STUDIO_TABLES.labelVersions);
+  assert.ok(versionCreate, "Expected a label version create call");
+  assert.equal(
+    versionCreate.requiredFields[STUDIO_FIELDS.labelVersions.versionNumber],
+    2
+  );
+  assert.equal(
+    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.sessionId],
+    "session-from-label"
+  );
+  assert.equal(updateCalls.length, 1);
+});
+
 test("rejected attempts are not persisted", async () => {
   let createCalls = 0;
   let updateCalls = 0;
@@ -334,6 +405,70 @@ test("persists valid input logo/character URL pointers", async () => {
   assert.equal(
     versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.inputCharacterUrl],
     "https://cdn.example.com/character.png"
+  );
+});
+
+test("maps bottle and output fallbacks onto label version fields", async () => {
+  const createCalls = [];
+  const s3Url = "https://cdn.example.com/exports/session%2Ffront-image.png";
+
+  const handler = createHandler({
+    parseBodyImpl: async () => ({
+      ...baseBody(),
+      bottle: "Outlaw",
+      output_image_url: undefined,
+      output_s3_url: s3Url,
+      output_zakeke_url: undefined,
+      output_s3_key: undefined,
+    }),
+    assertPayloadSizeImpl: () => {},
+    sendJsonImpl: sendJsonForTests,
+    getRecordOrNullImpl: async () => null,
+    computeNextVersionNumberImpl: async () => 1,
+    createResilientImpl: async (table, requiredFields, optionalFields) => {
+      createCalls.push({ table, requiredFields, optionalFields });
+      if (table === STUDIO_TABLES.labels) {
+        return {
+          id: "recLabelCreated",
+          fields: {
+            [STUDIO_FIELDS.labels.customers]: [CUSTOMER_ID],
+            [STUDIO_FIELDS.labels.labelVersions]: [],
+          },
+          createdTime: "2026-02-26T00:00:00.000Z",
+        };
+      }
+      if (table === STUDIO_TABLES.labelVersions) {
+        return { id: "recVersionCreated", createdTime: "2026-02-26T01:00:00.000Z" };
+      }
+      throw new Error(`Unexpected create: ${table}`);
+    },
+    updateResilientImpl: async (table, recordId) => ({ table, recordId }),
+  });
+
+  const result = await handler({}, { qs: {}, isV2: false, method: "POST" });
+  assert.equal(result.status, 200);
+
+  const versionCreate = createCalls.find((c) => c.table === STUDIO_TABLES.labelVersions);
+  assert.ok(versionCreate, "Expected label version create call");
+  assert.equal(
+    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.bottle],
+    "Outlaw"
+  );
+  assert.equal(
+    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.outputZakekeUrl],
+    s3Url
+  );
+  assert.equal(
+    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.outputS3Key],
+    "exports/session/front-image.png"
+  );
+  assert.equal(
+    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.outputImageUrl],
+    s3Url
+  );
+  assert.deepEqual(
+    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.outputImage],
+    [{ url: s3Url }]
   );
 });
 

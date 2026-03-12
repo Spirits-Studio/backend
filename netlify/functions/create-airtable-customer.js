@@ -206,6 +206,7 @@ export default withShopifyProxy(
 
       // 2) No Shopify user — create a bare record
       const anon = await createOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, {
+        "Source": "Shopify",
         "Shop Domain": shop,
         "Creation Source": "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
       });
