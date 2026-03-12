@@ -8,6 +8,7 @@ import {
   createWebhookLogger,
   mapWebhookErrorMessage,
   sendWebhookJson,
+  sendWebhookText,
 } from "./_lib/shopifyWebhook.js";
 import {
   normalizeOrderWebhookPayload,
@@ -63,11 +64,10 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "error",
         error: mapWebhookErrorMessage(envelope.parseError),
       });
-      sendWebhookJson(res, 400, {
+      return sendWebhookJson(res, 400, {
         ok: false,
         error: "invalid_json",
       });
-      return;
     }
 
     if (!verifyWebhookHmac({ rawBody: envelope.rawBody, providedHmac: envelope.hmac })) {
@@ -75,8 +75,7 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "error",
         error: "invalid_hmac",
       });
-      res.status(401).end("invalid hmac");
-      return;
+      return sendWebhookText(res, 401, "invalid hmac");
     }
 
     const payloadHash = hashWebhookPayload(envelope.rawBody);
@@ -94,13 +93,12 @@ export const createShopifyWebhookOrdersHandler = ({
         idempotent_skip: false,
         error: "idempotency_unavailable",
       });
-      sendWebhookJson(res, 503, {
+      return sendWebhookJson(res, 503, {
         ok: false,
         error: "idempotency_unavailable",
         message:
           "Webhook idempotency storage is unavailable. Refusing to process to avoid duplicate side effects.",
       });
-      return;
     }
 
     if (idempotency.skip) {
@@ -113,12 +111,11 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "skipped",
         logger,
       });
-      sendWebhookJson(res, 200, {
+      return sendWebhookJson(res, 200, {
         ok: true,
         idempotent_skip: true,
         webhook_id: envelope.webhook_id,
       });
-      return;
     }
 
     if (expectedTopic && envelope.topic && envelope.topic !== expectedTopic) {
@@ -131,14 +128,13 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "skipped",
         logger,
       });
-      sendWebhookJson(res, 202, {
+      return sendWebhookJson(res, 202, {
         ok: true,
         skipped: true,
         reason: "topic_mismatch",
         expected_topic: expectedTopic,
         received_topic: envelope.topic,
       });
-      return;
     }
 
     try {
@@ -255,7 +251,7 @@ export const createShopifyWebhookOrdersHandler = ({
         logger,
       });
 
-      sendWebhookJson(res, 200, responsePayload);
+      return sendWebhookJson(res, 200, responsePayload);
     } catch (error) {
       const errorMessage = mapWebhookErrorMessage(error);
 
@@ -271,7 +267,7 @@ export const createShopifyWebhookOrdersHandler = ({
         logger,
       });
 
-      sendWebhookJson(res, error?.status || 500, {
+      return sendWebhookJson(res, error?.status || 500, {
         ok: false,
         error: "server_error",
         message: error?.message || String(error),

@@ -124,6 +124,30 @@ const createWebhookRequest = ({
   };
 };
 
+const createWebhookEvent = ({
+  payload,
+  topic,
+  webhookId,
+  shopDomain = "wnbrmm-sg.myshopify.com",
+}) => {
+  const rawBody = JSON.stringify(payload || {});
+  const hmac = crypto
+    .createHmac("sha256", process.env.SHOPIFY_WEBHOOK_SECRET)
+    .update(rawBody, "utf8")
+    .digest("base64");
+
+  return {
+    headers: {
+      "x-shopify-topic": topic,
+      "x-shopify-shop-domain": shopDomain,
+      "x-shopify-webhook-id": webhookId,
+      "x-shopify-hmac-sha256": hmac,
+    },
+    body: rawBody,
+    isBase64Encoded: false,
+  };
+};
+
 const createWebhookResponse = () => ({
   statusCode: null,
   body: null,
@@ -141,6 +165,11 @@ const createWebhookResponse = () => ({
     return this;
   },
 });
+
+const parseNetlifyResponseBody = (response) => {
+  if (!response || typeof response.body !== "string" || !response.body) return null;
+  return JSON.parse(response.body);
+};
 
 test("duplicate webhook delivery is idempotently skipped", async () => {
   const fetchMock = installFetchSequence([
@@ -185,6 +214,153 @@ test("duplicate webhook delivery is idempotently skipped", async () => {
     assert.equal(res.statusCode, 200);
     assert.equal(res.body?.ok, true);
     assert.equal(res.body?.idempotent_skip, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("orders webhook handles Netlify event body without stream reader", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Webhook ID}='wh_event_orders_1')");
+      },
+      response: {
+        records: [{ id: "recWebhookEventOrders", fields: { Status: "processed" } }],
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookEventOrders",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "skipped");
+      },
+      response: {
+        records: [{ id: "recWebhookEventOrders", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const event = createWebhookEvent({
+      topic: "orders/create",
+      webhookId: "wh_event_orders_1",
+      payload: {
+        id: 10002,
+        line_items: [],
+      },
+    });
+
+    const response = await shopifyWebhookOrdersCreate(event);
+    const body = parseNetlifyResponseBody(response);
+
+    assert.equal(response?.statusCode, 200);
+    assert.equal(body?.ok, true);
+    assert.equal(body?.idempotent_skip, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("customers/create webhook handles Netlify event body without stream reader", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Webhook ID}='wh_event_customers_create_1')");
+      },
+      response: {
+        records: [{ id: "recWebhookEventCustomersCreate", fields: { Status: "processed" } }],
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookEventCustomersCreate",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "skipped");
+      },
+      response: {
+        records: [{ id: "recWebhookEventCustomersCreate", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const event = createWebhookEvent({
+      topic: "customers/create",
+      webhookId: "wh_event_customers_create_1",
+      payload: {
+        id: 501,
+        email: "customer-create@example.com",
+      },
+    });
+
+    const response = await shopifyWebhookCustomersCreate(event);
+    const body = parseNetlifyResponseBody(response);
+
+    assert.equal(response?.statusCode, 200);
+    assert.equal(body?.ok, true);
+    assert.equal(body?.idempotent_skip, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("customers/update webhook handles Netlify event body without stream reader", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Webhook ID}='wh_event_customers_update_1')");
+      },
+      response: {
+        records: [{ id: "recWebhookEventCustomersUpdate", fields: { Status: "processed" } }],
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookEventCustomersUpdate",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "skipped");
+      },
+      response: {
+        records: [{ id: "recWebhookEventCustomersUpdate", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const event = createWebhookEvent({
+      topic: "customers/update",
+      webhookId: "wh_event_customers_update_1",
+      payload: {
+        id: 502,
+        email: "customer-update@example.com",
+      },
+    });
+
+    const response = await shopifyWebhookCustomersUpdate(event);
+    const body = parseNetlifyResponseBody(response);
+
+    assert.equal(response?.statusCode, 200);
+    assert.equal(body?.ok, true);
+    assert.equal(body?.idempotent_skip, true);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

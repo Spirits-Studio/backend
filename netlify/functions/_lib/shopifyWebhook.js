@@ -70,21 +70,44 @@ export const normalizeWebhookHeaders = (headersInput = {}) => {
   return out;
 };
 
+const isWebRequestLike = (req) =>
+  Boolean(req) &&
+  typeof req?.text === "function" &&
+  typeof req?.headers?.get === "function";
+
+const hasAsyncIterator = (value) =>
+  Boolean(value) && typeof value[Symbol.asyncIterator] === "function";
+
 export const readWebhookRawBody = async (req) => {
+  if (isWebRequestLike(req)) {
+    const text = await req.text();
+    return String(text || "");
+  }
+
   if (typeof req?.body === "string") return req.body;
   if (Buffer.isBuffer(req?.body)) return req.body.toString("utf8");
   if (typeof req?.rawBody === "string") return req.rawBody;
   if (Buffer.isBuffer(req?.rawBody)) return req.rawBody.toString("utf8");
+  if (req?.isBase64Encoded && typeof req?.body === "string") {
+    return Buffer.from(req.body, "base64").toString("utf8");
+  }
+  if (req?.body && typeof req.body === "object") {
+    return JSON.stringify(req.body);
+  }
 
   const chunks = [];
-  for await (const chunk of req || []) {
+  if (!hasAsyncIterator(req)) return "";
+
+  for await (const chunk of req) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk || "")));
   }
   return Buffer.concat(chunks).toString("utf8");
 };
 
 export const parseWebhookEnvelope = async (req) => {
-  const headers = normalizeWebhookHeaders(req?.headers || {});
+  const headers = normalizeWebhookHeaders(
+    req?.headers || req?.multiValueHeaders || {}
+  );
   const rawBody = (await readWebhookRawBody(req)) || "";
 
   let payload = {};
@@ -314,5 +337,32 @@ export const completeWebhookIdempotency = async ({
 };
 
 export const sendWebhookJson = (res, status, payload) => {
-  res.status(status).json(payload);
+  if (res && typeof res.status === "function" && typeof res.json === "function") {
+    return res.status(status).json(payload);
+  }
+
+  return {
+    statusCode: status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+    body: JSON.stringify(payload),
+  };
+};
+
+export const sendWebhookText = (res, status, text) => {
+  const body = String(text || "");
+  if (res && typeof res.status === "function" && typeof res.end === "function") {
+    return res.status(status).end(body);
+  }
+
+  return {
+    statusCode: status,
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+    body,
+  };
 };
