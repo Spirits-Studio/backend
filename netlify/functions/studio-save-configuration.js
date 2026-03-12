@@ -295,7 +295,20 @@ export default withShopifyProxy(
           body.label_front_version_id,
           body.labelFrontVersionId,
           body.front_label_version_record_id,
-          body.frontLabelVersionRecordId
+          body.frontLabelVersionRecordId,
+          normalizeSide(
+            firstNonEmpty(
+              snapshot?.selectedLabelVersion?.designSide,
+              snapshot?.selectedLabelVersion?.design_side
+            )
+          ) === "front"
+            ? firstNonEmpty(
+                snapshot?.selectedLabelVersion?.recordId,
+                snapshot?.selectedLabelVersion?.record_id,
+                snapshot?.selectedLabelVersion?.labelVersionRecordId,
+                snapshot?.selectedLabelVersion?.label_version_record_id
+              )
+            : null
         )
       );
       const backVersionId = normalizeRecordId(
@@ -303,7 +316,20 @@ export default withShopifyProxy(
           body.label_back_version_id,
           body.labelBackVersionId,
           body.back_label_version_record_id,
-          body.backLabelVersionRecordId
+          body.backLabelVersionRecordId,
+          normalizeSide(
+            firstNonEmpty(
+              snapshot?.selectedLabelVersion?.designSide,
+              snapshot?.selectedLabelVersion?.design_side
+            )
+          ) === "back"
+            ? firstNonEmpty(
+                snapshot?.selectedLabelVersion?.recordId,
+                snapshot?.selectedLabelVersion?.record_id,
+                snapshot?.selectedLabelVersion?.labelVersionRecordId,
+                snapshot?.selectedLabelVersion?.label_version_record_id
+              )
+            : null
         )
       );
 
