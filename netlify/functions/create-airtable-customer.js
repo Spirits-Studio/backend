@@ -38,6 +38,25 @@ const pick = (qs, body, ...keys) => {
   return null;
 };
 
+const logCustomerResolution = ({
+  customerCreationReason,
+  providedRecordId = null,
+  shopifyIdPresent = false,
+  emailPresent = false,
+  recovered = false,
+  created = false,
+}) => {
+  console.log("[customer] create-airtable-customer", {
+    customer_creation_reason: customerCreationReason || "unknown",
+    endpoint: "create-airtable-customer",
+    shopify_id_present: Boolean(shopifyIdPresent),
+    email_present: Boolean(emailPresent),
+    provided_record_id: providedRecordId || null,
+    recovered: Boolean(recovered),
+    created: Boolean(created),
+  });
+};
+
 export default withShopifyProxy(
   async (arg, { qs, isV2, method, shop }) => {
     try {
@@ -50,6 +69,8 @@ export default withShopifyProxy(
       const lastName = pick(qs, body, "last_name", "lastName");
       const phone = pick(qs, body, "phone", "customer_phone", "customerPhone");
       const airtableId = pick(qs, body, "airtable_id", "airtableId");
+      const shopifyIdPresent = Boolean(customerId);
+      const emailPresent = Boolean(email);
 
       if (method === "PATCH") {
         if (!airtableId) {
@@ -83,6 +104,15 @@ export default withShopifyProxy(
           airtableId,
           updates
         );
+
+        logCustomerResolution({
+          customerCreationReason: "patch_update_existing",
+          providedRecordId: airtableId,
+          shopifyIdPresent,
+          emailPresent,
+          recovered: false,
+          created: false,
+        });
 
         return send(200, {
           ok: true,
@@ -125,6 +155,16 @@ export default withShopifyProxy(
             record = await updateOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, record.id, updates);
           }
 
+          logCustomerResolution({
+            customerCreationReason:
+              matchedBy === "shopify_id" ? "matched_by_shopify_id" : "matched_by_email",
+            providedRecordId: record.id,
+            shopifyIdPresent,
+            emailPresent,
+            recovered: false,
+            created: false,
+          });
+
           return send(200, {
             ok: true,
             created: false,
@@ -146,6 +186,15 @@ export default withShopifyProxy(
           "Creation Source": "Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
         });
 
+        logCustomerResolution({
+          customerCreationReason: "created_logged_in",
+          providedRecordId: created.id,
+          shopifyIdPresent,
+          emailPresent,
+          recovered: false,
+          created: true,
+        });
+
         return send(200, {
           ok: true,
           created: true,
@@ -159,6 +208,15 @@ export default withShopifyProxy(
       const anon = await createOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, {
         "Shop Domain": shop,
         "Creation Source": "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
+      });
+
+      logCustomerResolution({
+        customerCreationReason: "created_anonymous",
+        providedRecordId: anon.id,
+        shopifyIdPresent,
+        emailPresent,
+        recovered: false,
+        created: true,
       });
 
       return send(200, {

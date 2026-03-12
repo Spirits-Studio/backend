@@ -58,7 +58,24 @@ export async function findOneBy(table, field, value) {
     url.searchParams.set("filterByFormula", `({${field}}='${safe}')`);
 
     const response = await fetch(url, { headers: auth });
-    const json = await response.json();
+    const responseText = await response.text();
+    let json;
+    try {
+      json = responseText ? JSON.parse(responseText) : {};
+    } catch {
+      json = {};
+    }
+
+    if (!response.ok) {
+      const err = new Error(
+        `Airtable GET ${url.toString()} failed with ${response.status} ${response.statusText}: ${responseText}`
+      );
+      err.status = response.status;
+      err.url = url.toString();
+      err.method = "GET";
+      err.responseText = responseText;
+      throw err;
+    }
 
     const record = json.records?.[0] || null;
     console.log("[airtable] findOneBy result", { found: !!record, id: record?.id });

@@ -206,11 +206,155 @@ test("resolveCustomerRecordIdOrCreate can create when customer searches are deni
         email: "user@example.com",
       },
       qs: {},
+      allowCreate: true,
+      endpoint: "test-resolve-customer",
     });
 
     assert.equal(result.customerRecordId, "recCreatedCustomer");
     assert.equal(result.created, true);
     assert.equal(result.recovered, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("resolveCustomerRecordIdOrCreate auto-creates after confirmed misses when identity is present", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
+      },
+      status: 404,
+      response: {
+        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        assert.equal(url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/123')"
+        );
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        assert.equal(url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='legacy_airtable_record:recStaleCustomer')"
+        );
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "POST",
+      assert: ({ url, body }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        const parsed = JSON.parse(String(body || "{}"));
+        const fields = parsed?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "gid://shopify/Customer/123");
+      },
+      response: {
+        records: [{ id: "recCreatedAfterConfirmedMiss", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const result = await resolveCustomerRecordIdOrCreate({
+      providedCustomerRecordId: "recStaleCustomer",
+      body: {
+        shopify_customer_id: "gid://shopify/Customer/123",
+      },
+      qs: {},
+    });
+
+    assert.equal(result.customerRecordId, "recCreatedAfterConfirmedMiss");
+    assert.equal(result.created, true);
+    assert.equal(result.recovered, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("resolveCustomerRecordIdOrCreate does not auto-create when lookup certainty is degraded", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
+      },
+      status: 404,
+      response: {
+        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        assert.equal(url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/123')"
+        );
+      },
+      status: 403,
+      response: {
+        error: {
+          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
+          message:
+            "Invalid permissions, or the requested model was not found.",
+        },
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        assert.equal(url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='legacy_airtable_record:recStaleCustomer')"
+        );
+      },
+      status: 403,
+      response: {
+        error: {
+          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
+          message:
+            "Invalid permissions, or the requested model was not found.",
+        },
+      },
+    },
+  ]);
+
+  try {
+    const result = await resolveCustomerRecordIdOrCreate({
+      providedCustomerRecordId: "recStaleCustomer",
+      body: {
+        shopify_customer_id: "gid://shopify/Customer/123",
+      },
+      qs: {},
+    });
+
+    assert.equal(result.customerRecordId, null);
+    assert.equal(result.created, false);
+    assert.equal(result.recovered, false);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

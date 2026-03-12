@@ -12,6 +12,7 @@
     "build:functions": "netlify functions:build",
     "check:studio-schema": "node scripts/check-studio-airtable-schema.mjs",
     "backfill:studio-session-id": "node scripts/backfill-studio-session-id.mjs",
+    "dedupe:airtable-customers": "node scripts/dedupe-airtable-customers.mjs",
     "deploy": "netlify deploy --prod"
   },
   "dependencies": {

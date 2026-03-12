@@ -164,25 +164,30 @@ export default withShopifyProxy(
         )
       );
       if (!providedCustomerRecordId) {
-        return sendJson(400, {
+        return sendJson(409, {
           ok: false,
-          error: "missing_customer_record_id",
-          message: "A valid Airtable customer record id is required.",
+          error: "customer_not_resolved",
+          message:
+            "A valid Airtable customer record id is required before saving. Resolve identity via create-airtable-customer first.",
         });
       }
       const customerResolution = await resolveCustomerRecordIdOrCreate({
         providedCustomerRecordId,
         body,
         qs,
+        allowCreate: false,
+        endpoint: "studio-save-configuration",
       });
       const customerRecordId = normalizeRecordId(
         customerResolution?.customerRecordId
       );
       if (!customerRecordId) {
-        return sendJson(400, {
+        return sendJson(409, {
           ok: false,
-          error: "missing_customer_record_id",
-          message: "A valid Airtable customer record id is required.",
+          error: "customer_not_resolved",
+          message:
+            "Could not resolve Airtable customer record id for this request. Resolve identity via create-airtable-customer first.",
+          provided_customer_record_id: providedCustomerRecordId,
         });
       }
 

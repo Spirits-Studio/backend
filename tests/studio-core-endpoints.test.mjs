@@ -336,7 +336,7 @@ test("studio-save-configuration maps lite closure and default no-wax value", asy
   }
 });
 
-test("studio-save-configuration recovers missing customer records by creating a replacement", async () => {
+test("studio-save-configuration returns customer_not_resolved when provided customer id is stale", async () => {
   const fetchMock = installFetchSequence([
     {
       method: "GET",
@@ -354,40 +354,6 @@ test("studio-save-configuration recovers missing customer records by creating a 
       },
       response: {
         records: [],
-      },
-    },
-    {
-      method: "POST",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        const fields = call.body?.records?.[0]?.fields || {};
-        assert.equal(
-          fields["Shopify ID"],
-          "legacy_airtable_record:recCustomerLegacyA"
-        );
-      },
-      response: {
-        records: [{ id: "recCustomerRecoveredA", fields: {} }],
-      },
-    },
-    {
-      method: "POST",
-      table: STUDIO_TABLES.savedConfigurations,
-      assert: (call) => {
-        const fields = call.body?.records?.[0]?.fields || {};
-        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
-          "recCustomerRecoveredA",
-        ]);
-      },
-      response: {
-        records: [
-          {
-            id: "recSavedConfigurationRecoveredA",
-            fields: {
-              [STUDIO_FIELDS.savedConfigurations.configurationId]: "CFG-RECOVER-1",
-            },
-          },
-        ],
       },
     },
   ]);
@@ -408,11 +374,115 @@ test("studio-save-configuration recovers missing customer records by creating a 
       })
     );
 
+    assert.equal(response.status, 409);
+    const payload = await response.json();
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error, "customer_not_resolved");
+    assert.equal(payload.provided_customer_record_id, "recCustomerLegacyA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("studio-save-configuration auto-creates customer for stale id when signed identity is present", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerLegacyB",
+      status: 404,
+      response: { error: { message: "NOT_FOUND" } },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='gid://shopify/Customer/9001')");
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='legacy_airtable_record:recCustomerLegacyB')");
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Email}='legacy@example.com')");
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "gid://shopify/Customer/9001");
+        assert.equal(fields.Email, "legacy@example.com");
+      },
+      response: {
+        records: [{ id: "recCustomerRecreatedB", fields: {} }],
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
+          "recCustomerRecreatedB",
+        ]);
+      },
+      response: {
+        records: [{ id: "recSavedConfigurationRecoveredB", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const response = await studioSaveConfiguration(
+      createProxyEvent({
+        method: "POST",
+        query: {
+          logged_in_customer_id: "gid://shopify/Customer/9001",
+          logged_in_customer_email: "legacy@example.com",
+        },
+        body: {
+          customer_record_id: "recCustomerLegacyB",
+          status: "Saved",
+          snapshot: {
+            bottle: { name: "Outlaw" },
+            liquid: { name: "Pink Gin" },
+            closure: { name: "Ebony" },
+          },
+        },
+      })
+    );
+
     assert.equal(response.status, 200);
     const payload = await response.json();
     assert.equal(payload.ok, true);
-    assert.equal(payload.customer_record_id, "recCustomerRecoveredA");
+    assert.equal(payload.customer_record_id, "recCustomerRecreatedB");
     assert.equal(payload.customer_record_recovered, true);
+    assert.equal(
+      payload.saved_configuration_record_id,
+      "recSavedConfigurationRecoveredB"
+    );
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
@@ -700,6 +770,229 @@ test("shopify-webhook-orders-create writes canonical Orders & Fulfilment mapping
     assert.equal(res.statusCode, 200);
     assert.equal(res.body?.ok, true);
     assert.deepEqual(res.body?.updated_saved_configurations, ["recSavedConfigurationA"]);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("shopify-webhook-orders-create merges anonymous customer history into canonical customer", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='9001')");
+      },
+      response: {
+        records: [{ id: "recCanonicalCustomer", fields: { "Shopify ID": "9001" } }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigurationAnon",
+      response: {
+        id: "recSavedConfigurationAnon",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recAnonCustomer"],
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "FIND('recAnonCustomer', ARRAYJOIN({Customer}))");
+      },
+      response: {
+        records: [
+          {
+            id: "recSavedConfigurationAnon",
+            fields: {
+              [STUDIO_FIELDS.savedConfigurations.customer]: ["recAnonCustomer"],
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const row = call.body?.records?.[0] || {};
+        assert.equal(row.id, "recSavedConfigurationAnon");
+        const fields = row.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
+          "recCanonicalCustomer",
+        ]);
+      },
+      response: {
+        records: [{ id: "recSavedConfigurationAnon" }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labels,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "FIND('recAnonCustomer', ARRAYJOIN({Customers}))");
+      },
+      response: {
+        records: [
+          {
+            id: "recLabelAnon",
+            fields: {
+              [STUDIO_FIELDS.labels.customers]: ["recAnonCustomer"],
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labels,
+      assert: (call) => {
+        const row = call.body?.records?.[0] || {};
+        assert.equal(row.id, "recLabelAnon");
+        const fields = row.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.labels.customers], ["recCanonicalCustomer"]);
+      },
+      response: {
+        records: [{ id: "recLabelAnon" }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "FIND('recAnonCustomer', ARRAYJOIN({Customer}))");
+      },
+      response: {
+        records: [
+          {
+            id: "recVersionAnonCustomerField",
+            fields: {
+              Customer: ["recAnonCustomer"],
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labelVersions,
+      assert: (call) => {
+        const row = call.body?.records?.[0] || {};
+        assert.equal(row.id, "recVersionAnonCustomerField");
+        const fields = row.fields || {};
+        assert.deepEqual(fields.Customer, ["recCanonicalCustomer"]);
+      },
+      response: {
+        records: [{ id: "recVersionAnonCustomerField" }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "FIND('recAnonCustomer', ARRAYJOIN({Customers}))");
+      },
+      response: {
+        records: [
+          {
+            id: "recVersionAnonCustomersField",
+            fields: {
+              Customers: ["recAnonCustomer"],
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labelVersions,
+      assert: (call) => {
+        const row = call.body?.records?.[0] || {};
+        assert.equal(row.id, "recVersionAnonCustomersField");
+        const fields = row.fields || {};
+        assert.deepEqual(fields.Customers, ["recCanonicalCustomer"]);
+      },
+      response: {
+        records: [{ id: "recVersionAnonCustomersField" }],
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Order ID"], "111222333");
+        assert.deepEqual(fields.Customer, ["recCanonicalCustomer"]);
+        assert.deepEqual(fields["Saved Configuration"], ["recSavedConfigurationAnon"]);
+        assert.equal(fields["Order Status"], "Order Received");
+      },
+      response: {
+        records: [{ id: "recOrderAnonMerged" }],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const row = call.body?.records?.[0] || {};
+        assert.equal(row.id, "recSavedConfigurationAnon");
+        const fields = row.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
+          "recCanonicalCustomer",
+        ]);
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.status], "Ordered");
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.order], [
+          "recOrderAnonMerged",
+        ]);
+      },
+      response: {
+        records: [{ id: "recSavedConfigurationAnon" }],
+      },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      id: 111222333,
+      email: "guest@example.com",
+      customer: {
+        id: 9001,
+        email: "guest@example.com",
+        first_name: "Guest",
+        last_name: "User",
+      },
+      line_items: [
+        {
+          properties: [
+            { name: "_saved_configuration_id", value: "recSavedConfigurationAnon" },
+          ],
+        },
+      ],
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersCreate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.canonical_customer_record_id, "recCanonicalCustomer");
+    assert.deepEqual(res.body?.merged_customer_pairs, [
+      "recAnonCustomer->recCanonicalCustomer",
+    ]);
+    assert.equal(res.body?.merged_records_updated, 4);
+    assert.deepEqual(res.body?.updated_saved_configurations, [
+      "recSavedConfigurationAnon",
+    ]);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

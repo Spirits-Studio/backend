@@ -155,10 +155,11 @@ export const createStudioSaveLabelVersionHandler = ({
         )
       );
       if (!providedCustomerRecordId) {
-        return sendJsonImpl(400, {
+        return sendJsonImpl(409, {
           ok: false,
-          error: "missing_customer_record_id",
-          message: "A valid Airtable customer record id is required.",
+          error: "customer_not_resolved",
+          message:
+            "A valid Airtable customer record id is required before saving. Resolve identity via create-airtable-customer first.",
         });
       }
 
@@ -207,13 +208,17 @@ export const createStudioSaveLabelVersionHandler = ({
         providedCustomerRecordId,
         body,
         qs,
+        allowCreate: false,
+        endpoint: "studio-save-label-version",
       });
       const customerRecordId = normalizeRecordId(customerResolution?.customerRecordId);
       if (!customerRecordId) {
-        return sendJsonImpl(400, {
+        return sendJsonImpl(409, {
           ok: false,
-          error: "missing_customer_record_id",
-          message: "A valid Airtable customer record id is required.",
+          error: "customer_not_resolved",
+          message:
+            "Could not resolve Airtable customer record id for this request. Resolve identity via create-airtable-customer first.",
+          provided_customer_record_id: providedCustomerRecordId,
         });
       }
 

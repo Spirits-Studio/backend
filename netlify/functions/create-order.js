@@ -22,9 +22,18 @@ export default async (req, res) => {
       providedCustomerRecordId,
       body: { userRecordId },
       qs: {},
+      allowCreate: false,
+      endpoint: "create-order",
     });
     const customerRecordId = normalizeRecordId(customerResolution?.customerRecordId);
-    if (!customerRecordId) return json(res, 400, { error: 'missing_params' });
+    if (!customerRecordId) {
+      return json(res, 409, {
+        error: "customer_not_resolved",
+        message:
+          "Could not resolve Airtable customer record id for this request. Resolve identity via create-airtable-customer first.",
+        provided_customer_record_id: providedCustomerRecordId,
+      });
+    }
 
     const orderId = crypto.randomUUID();
     const rec = await createOne(process.env.AIRTABLE_ORDERS_TABLE, {
