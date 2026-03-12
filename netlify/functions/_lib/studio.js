@@ -75,6 +75,13 @@ export const STUDIO_FIELDS = {
     versionKind: "Version Kind",
     versionNumber: "Version Number",
   },
+  orders: {
+    orderId: "Order ID",
+    customer: "Customer",
+    savedConfiguration: "Saved Configuration",
+    orderStatus: "Order Status",
+    addresses: "Addresses",
+  },
 };
 
 // Canonical-first fallback names for in-flight Airtable schema migration.

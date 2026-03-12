@@ -173,10 +173,6 @@ const relinkCustomerHistory = async ({ fromCustomerId, toCustomerId }) => {
       table: STUDIO_TABLES.labels,
       fields: [STUDIO_FIELDS.labels.customers],
     },
-    {
-      table: STUDIO_TABLES.labelVersions,
-      fields: ["Customer", "Customers"],
-    },
   ];
 
   let touched = 0;

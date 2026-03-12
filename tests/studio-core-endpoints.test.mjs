@@ -865,68 +865,6 @@ test("shopify-webhook-orders-create merges anonymous customer history into canon
       },
     },
     {
-      method: "GET",
-      table: STUDIO_TABLES.labelVersions,
-      assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(formula, "FIND('recAnonCustomer', ARRAYJOIN({Customer}))");
-      },
-      response: {
-        records: [
-          {
-            id: "recVersionAnonCustomerField",
-            fields: {
-              Customer: ["recAnonCustomer"],
-            },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.labelVersions,
-      assert: (call) => {
-        const row = call.body?.records?.[0] || {};
-        assert.equal(row.id, "recVersionAnonCustomerField");
-        const fields = row.fields || {};
-        assert.deepEqual(fields.Customer, ["recCanonicalCustomer"]);
-      },
-      response: {
-        records: [{ id: "recVersionAnonCustomerField" }],
-      },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.labelVersions,
-      assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(formula, "FIND('recAnonCustomer', ARRAYJOIN({Customers}))");
-      },
-      response: {
-        records: [
-          {
-            id: "recVersionAnonCustomersField",
-            fields: {
-              Customers: ["recAnonCustomer"],
-            },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.labelVersions,
-      assert: (call) => {
-        const row = call.body?.records?.[0] || {};
-        assert.equal(row.id, "recVersionAnonCustomersField");
-        const fields = row.fields || {};
-        assert.deepEqual(fields.Customers, ["recCanonicalCustomer"]);
-      },
-      response: {
-        records: [{ id: "recVersionAnonCustomersField" }],
-      },
-    },
-    {
       method: "POST",
       table: STUDIO_TABLES.orders,
       assert: (call) => {
@@ -989,7 +927,7 @@ test("shopify-webhook-orders-create merges anonymous customer history into canon
     assert.deepEqual(res.body?.merged_customer_pairs, [
       "recAnonCustomer->recCanonicalCustomer",
     ]);
-    assert.equal(res.body?.merged_records_updated, 4);
+    assert.equal(res.body?.merged_records_updated, 2);
     assert.deepEqual(res.body?.updated_saved_configurations, [
       "recSavedConfigurationAnon",
     ]);
