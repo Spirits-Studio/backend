@@ -671,13 +671,14 @@ async function main(arg, { qs, method }) {
       // Upload to S3 with same structure as create-front-ai-label
       try {
         const basePrefix = `sessions/${sIdSafe}/${bottleSafe}/review/${designSide}`;
+        const versionToken = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const uploaded = [];
         for (let i = 0; i < images.length; i++) {
           const { buffer, mimeType } = parseDataUrlToBuffer(images[i]);
           if (!buffer || !buffer.length) continue;
           const ext = mimeToExt(mimeType);
           const index = images.length > 1 ? `_${String(i + 1).padStart(2, "0")}` : "";
-          const key = `${basePrefix}_label${index}.${ext}`;
+          const key = `${basePrefix}_label_${versionToken}${index}.${ext}`;
           const url = await uploadBufferToS3({
             buffer,
             contentType: mimeType || "image/png",
@@ -694,6 +695,16 @@ async function main(arg, { qs, method }) {
         }
         uploadsBySide[designSide] = uploaded;
         sidePrimaryUrls[designSide] = uploaded[0]?.url || "";
+        console.info("[trace:s3:backend:review-ai-label:upload]", {
+          sessionId: sIdSafe,
+          bottle: bottleSafe,
+          designSide,
+          versionToken,
+          uploadedCount: uploaded.length,
+          uploadedKeys: uploaded.map((row) => row.key),
+          uploadedUrls: uploaded.map((row) => row.url),
+          primaryUrl: sidePrimaryUrls[designSide] || null,
+        });
       } catch (uploadErr) {
         console.error(`[review] S3 upload failed (${designSide}):`, uploadErr?.message || uploadErr);
         return {

@@ -248,6 +248,14 @@ exports.handler = async (event) => {
   const source = asString(payload.source);
   const selectedAt = asString(payload.selectedAt) || new Date().toISOString();
 
+  console.info('[trace:s3:backend:select-label-version:request]', {
+    sessionId: sessionId || null,
+    designSide: designSide || null,
+    labelVersionRecordId: labelVersionRecordId || null,
+    source: source || null,
+    selectedAt,
+  });
+
   if (!sessionId) return toJson(400, { ok: false, error: 'missing_session_id' });
   if (!VALID_SIDES.has(designSide)) return toJson(400, { ok: false, error: 'invalid_design_side' });
   if (!labelVersionRecordId) return toJson(400, { ok: false, error: 'missing_label_version_record_id' });
@@ -297,8 +305,23 @@ exports.handler = async (event) => {
       source,
       designSide
     );
+    console.info('[trace:s3:backend:select-label-version:resolved]', {
+      sessionId,
+      designSide,
+      labelVersionRecordId,
+      currentSelectedId: currentSelectedId || null,
+      candidateOutputImageUrl: selectedLabelVersion?.outputImageUrl || null,
+      candidateOutputPdfUrl: selectedLabelVersion?.outputPdfUrl || null,
+    });
 
     if (currentSelectedId === labelVersionRecordId) {
+      console.info('[trace:s3:backend:select-label-version:idempotent]', {
+        sessionId,
+        designSide,
+        labelVersionRecordId,
+        currentSelectedId: currentSelectedId || null,
+        outputImageUrl: selectedLabelVersion?.outputImageUrl || null,
+      });
       return toJson(200, {
         ok: true,
         idempotent: true,
@@ -349,6 +372,16 @@ exports.handler = async (event) => {
       labelVersionRecordId,
       source,
       selectedAt,
+      savedConfigurationRecordId: savedConfigRecord.id,
+    });
+
+    console.info('[trace:s3:backend:select-label-version:updated]', {
+      sessionId,
+      designSide,
+      previousSelectedId: currentSelectedId || null,
+      nextSelectedId: labelVersionRecordId,
+      outputImageUrl: selectedLabelVersion?.outputImageUrl || null,
+      outputPdfUrl: selectedLabelVersion?.outputPdfUrl || null,
       savedConfigurationRecordId: savedConfigRecord.id,
     });
 

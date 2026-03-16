@@ -803,6 +803,7 @@ async function main(arg, { qs, method }) {
     // Upload generated images to S3
     const bucket = process.env.S3_BUCKET || DEFAULT_BUCKET;
     const basePrefix = `sessions/${sIdSafe}/${bottleSafe}/front`;
+    const versionToken = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const uploaded = [];
     for (let i = 0; i < images.length; i++) {
@@ -810,7 +811,7 @@ async function main(arg, { qs, method }) {
       if (!buffer || !buffer.length) continue;
       const ext = mimeToExt(mimeType);
       const index = images.length > 1 ? `_${String(i + 1).padStart(2, "0")}` : "";
-      const key = `${basePrefix}_label${index}.${ext}`;
+      const key = `${basePrefix}_label_${versionToken}${index}.${ext}`;
       const url = await uploadBufferToS3({
         buffer,
         contentType: mimeType || "image/png",
@@ -826,6 +827,15 @@ async function main(arg, { qs, method }) {
       uploaded.push({ key, url, contentType: mimeType });
     }
     const frontS3Url = uploaded[0]?.url || "";
+    console.info("[trace:s3:backend:create-front-ai-label:upload]", {
+      sessionId: sIdSafe,
+      bottle: bottleSafe,
+      versionToken,
+      uploadedCount: uploaded.length,
+      uploadedKeys: uploaded.map((row) => row.key),
+      uploadedUrls: uploaded.map((row) => row.url),
+      frontS3Url: frontS3Url || null,
+    });
 
     // // Old retry/processing path (kept for reference):
     // // - Trim white borders

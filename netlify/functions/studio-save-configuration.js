@@ -333,6 +333,35 @@ export default withShopifyProxy(
         )
       );
 
+      console.info("[trace:s3:backend:studio-save-configuration:resolved-selection]", {
+        sessionId,
+        frontVersionId: frontVersionId || null,
+        backVersionId: backVersionId || null,
+        snapshotSelectedLabelVersionRecordId:
+          normalizeRecordId(
+            firstNonEmpty(
+              snapshot?.selectedLabelVersion?.recordId,
+              snapshot?.selectedLabelVersion?.record_id,
+              snapshot?.selectedLabelVersion?.labelVersionRecordId,
+              snapshot?.selectedLabelVersion?.label_version_record_id
+            )
+          ) || null,
+        snapshotSelectedLabelVersionSide:
+          normalizeSide(
+            firstNonEmpty(
+              snapshot?.selectedLabelVersion?.designSide,
+              snapshot?.selectedLabelVersion?.design_side
+            )
+          ) || null,
+        snapshotSelectedLabelVersionOutputImageUrl:
+          firstNonEmpty(
+            snapshot?.selectedLabelVersion?.outputImageUrl,
+            snapshot?.selectedLabelVersion?.output_image_url,
+            snapshot?.selectedLabelVersion?.outputS3Url,
+            snapshot?.selectedLabelVersion?.output_s3_url
+          ) || null,
+      });
+
       let frontVersionRecord = null;
       let backVersionRecord = null;
       if (frontVersionId) {

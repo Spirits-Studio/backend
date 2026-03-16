@@ -408,6 +408,31 @@ export const createStudioSaveLabelVersionHandler = ({
       );
 
       const payloadInputs = parsePayloadInputs(body);
+      const previousOutputImageUrl = sanitizeUrl(
+        previousVersionRecord?.fields?.[STUDIO_FIELDS.labelVersions.outputImageUrl]
+      );
+      const previousOutputS3Url = sanitizeUrl(
+        previousVersionRecord?.fields?.[STUDIO_FIELDS.labelVersions.outputS3Url]
+      );
+      const previousOutputS3Key = sanitizeText(
+        previousVersionRecord?.fields?.[STUDIO_FIELDS.labelVersions.outputS3Key],
+        255
+      );
+      console.info("[trace:s3:backend:studio-save-label-version:resolved-input]", {
+        sessionId: resolvedSessionId || sessionId || null,
+        side,
+        versionKind,
+        forceNewLabelHead,
+        labelRecordId: labelRecord?.id || null,
+        previousLabelVersionRecordId: previousLabelVersionRecordId || null,
+        previousOutputImageUrl: previousOutputImageUrl || null,
+        previousOutputS3Url: previousOutputS3Url || null,
+        previousOutputS3Key: previousOutputS3Key || null,
+        incomingOutputImageUrl: payloadInputs.outputImageUrl || null,
+        incomingOutputS3Url: payloadInputs.outputS3Url || null,
+        incomingOutputS3Key: payloadInputs.outputS3Key || null,
+        incomingOutputPdfUrl: payloadInputs.outputPdfUrl || null,
+      });
       if (payloadInputs.invalidInputLogoRef) {
         return sendJsonImpl(400, {
           ok: false,
@@ -536,6 +561,22 @@ export const createStudioSaveLabelVersionHandler = ({
             : {}),
         }
       );
+
+      console.info("[trace:s3:backend:studio-save-label-version:created]", {
+        sessionId: resolvedSessionId || null,
+        side,
+        versionKind,
+        labelRecordId: labelRecord.id,
+        labelVersionRecordId: versionRecord.id,
+        versionNumber,
+        previousLabelVersionRecordId: previousLabelVersionRecordId || null,
+        previousOutputImageUrl: previousOutputImageUrl || null,
+        previousOutputS3Url: previousOutputS3Url || null,
+        previousOutputS3Key: previousOutputS3Key || null,
+        persistedOutputImageUrl: payloadInputs.outputImageUrl || null,
+        persistedOutputS3Url: payloadInputs.outputS3Url || null,
+        persistedOutputS3Key: payloadInputs.outputS3Key || null,
+      });
 
       return sendJsonImpl(200, {
         ok: true,
