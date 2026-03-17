@@ -6,6 +6,7 @@ import renameConfiguration from "./studio-rename-configuration.js";
 import renameLabel from "./studio-rename-label.js";
 import hasContent from "./studio-has-content.js";
 import getConfiguration from "./studio-configuration.js";
+import resetLabelLineage from "./studio-reset-label-lineage.js";
 
 const notFound = () =>
   new Response(
@@ -35,6 +36,7 @@ export default async (arg) => {
   if (path.endsWith("/studio/rename-label")) return renameLabel(arg);
   if (path.endsWith("/studio/has-content")) return hasContent(arg);
   if (path.endsWith("/studio/configuration")) return getConfiguration(arg);
+  if (path.endsWith("/studio/reset-label-lineage")) return resetLabelLineage(arg);
 
   return notFound();
 };

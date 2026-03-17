@@ -206,3 +206,18 @@ export async function updateOne(table, recordId, fields) {
     throw err;
   }
 }
+
+/**
+ * Delete a record by id in `table`.
+ * Returns Airtable delete response ({ id, deleted }) when available.
+ */
+export async function deleteOne(table, recordId) {
+  try {
+    console.log("[airtable] deleteOne", { table, recordId });
+    const json = await airtableRequest([table, recordId], { method: "DELETE" });
+    return json || { id: recordId, deleted: true };
+  } catch (err) {
+    console.error("[airtable] deleteOne error", err);
+    throw err;
+  }
+}

@@ -1,6 +1,7 @@
 import {
   createOne,
   updateOne,
+  deleteOne,
   getOne,
   listRecords,
   findOneBy,
@@ -391,6 +392,16 @@ export const buildLinkedCustomerFormula = (fieldName, customerRecordId) => {
 export const getRecordOrNull = async (table, recordId) => {
   if (!recordId) return null;
   return getOne(table, recordId);
+};
+
+export const deleteRecordOrNull = async (table, recordId) => {
+  if (!recordId) return null;
+  try {
+    return await deleteOne(table, recordId);
+  } catch (error) {
+    if (Number(error?.status || 0) === 404) return null;
+    throw error;
+  }
 };
 
 export const mapErrorResponse = (error) => ({
