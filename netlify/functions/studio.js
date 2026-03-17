@@ -1,5 +1,6 @@
 import saveLabelVersion from "./studio-save-label-version.js";
 import saveConfiguration from "./studio-save-configuration.js";
+import selectLabelVersion from "./studio-select-label-version.js";
 import listStudio from "./studio-list.js";
 import renameConfiguration from "./studio-rename-configuration.js";
 import renameLabel from "./studio-rename-label.js";
@@ -28,6 +29,7 @@ export default async (arg) => {
 
   if (path.endsWith("/studio/save-label-version")) return saveLabelVersion(arg);
   if (path.endsWith("/studio/save-configuration")) return saveConfiguration(arg);
+  if (path.endsWith("/studio/select-label-version")) return selectLabelVersion(arg);
   if (path.endsWith("/studio/list")) return listStudio(arg);
   if (path.endsWith("/studio/rename-configuration")) return renameConfiguration(arg);
   if (path.endsWith("/studio/rename-label")) return renameLabel(arg);

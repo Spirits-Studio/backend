@@ -334,7 +334,7 @@ export default withShopifyProxy(
       );
 
       console.info("[trace:s3:backend:studio-save-configuration:resolved-selection]", {
-        sessionId,
+        requestedSessionId: requestedSessionId || null,
         frontVersionId: frontVersionId || null,
         backVersionId: backVersionId || null,
         snapshotSelectedLabelVersionRecordId:
