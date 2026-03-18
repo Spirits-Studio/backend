@@ -9,6 +9,7 @@ import {
   firstNonEmpty,
   normalizeRecordId,
   listAllRecords,
+  getRecordOrNull,
   buildLinkedCustomerFormula,
   getFieldValue,
   getLinkedIds,
@@ -70,6 +71,10 @@ const buildVersionsFormula = (labelRecordIds = []) => {
 };
 
 const PREVIOUS_LABEL_VERSION_FIELD_FALLBACKS = ["Previous Label Versions"];
+const LABEL_VERSION_LABEL_FIELD_FALLBACKS = [
+  "Labels: Current Front Label Versions",
+  "Labels: Current Back Label Versions",
+];
 
 export default withShopifyProxy(
   async (arg, { qs, isV2, method }) => {
@@ -125,9 +130,41 @@ export default withShopifyProxy(
       }
 
       const versionsById = new Map(versionRecords.map((record) => [record.id, record]));
+      const explicitVersionIds = Array.from(
+        new Set(
+          labelRecords.flatMap((record) => [
+            ...getLinkedIds(record, STUDIO_FIELDS.labels.labelVersions),
+            ...getLinkedIds(
+              record,
+              STUDIO_FIELDS.labels.currentFrontLabelVersion,
+              STUDIO_FIELD_FALLBACKS.labels.currentFrontLabelVersion
+            ),
+            ...getLinkedIds(
+              record,
+              STUDIO_FIELDS.labels.currentBackLabelVersion,
+              STUDIO_FIELD_FALLBACKS.labels.currentBackLabelVersion
+            ),
+          ])
+        )
+      ).filter((id) => !versionsById.has(id));
+      if (explicitVersionIds.length) {
+        const directVersionRecords = await Promise.all(
+          explicitVersionIds.map((id) => getRecordOrNull(STUDIO_TABLES.labelVersions, id))
+        );
+        directVersionRecords.filter(Boolean).forEach((record) => {
+          if (versionsById.has(record.id)) return;
+          versionsById.set(record.id, record);
+          versionRecords.push(record);
+        });
+      }
+
       const versionsByLabelId = new Map();
       versionRecords.forEach((record) => {
-        const linkedLabels = getLinkedIds(record, STUDIO_FIELDS.labelVersions.labels);
+        const linkedLabels = getLinkedIds(
+          record,
+          STUDIO_FIELDS.labelVersions.labels,
+          LABEL_VERSION_LABEL_FIELD_FALLBACKS
+        );
         linkedLabels.forEach((labelId) => {
           const current = versionsByLabelId.get(labelId) || [];
           current.push(record);
@@ -187,7 +224,21 @@ export default withShopifyProxy(
       const labels = labelRecords
         .map((record) => {
           const fields = record.fields || {};
-          const linkedIds = getLinkedIds(record, STUDIO_FIELDS.labels.labelVersions);
+          const linkedIds = Array.from(
+            new Set([
+              ...getLinkedIds(record, STUDIO_FIELDS.labels.labelVersions),
+              ...getLinkedIds(
+                record,
+                STUDIO_FIELDS.labels.currentFrontLabelVersion,
+                STUDIO_FIELD_FALLBACKS.labels.currentFrontLabelVersion
+              ),
+              ...getLinkedIds(
+                record,
+                STUDIO_FIELDS.labels.currentBackLabelVersion,
+                STUDIO_FIELD_FALLBACKS.labels.currentBackLabelVersion
+              ),
+            ])
+          );
           const linkedVersionRecords = linkedIds
             .map((id) => versionsById.get(id))
             .filter(Boolean);
@@ -229,8 +280,12 @@ export default withShopifyProxy(
               const versionFields = versionRecord.fields || {};
               const linkedVersionLabelIds = getLinkedIds(
                 versionRecord,
-                STUDIO_FIELDS.labelVersions.labels
+                STUDIO_FIELDS.labelVersions.labels,
+                LABEL_VERSION_LABEL_FIELD_FALLBACKS
               );
+              const sessionSourceLabelIds = linkedVersionLabelIds.length
+                ? linkedVersionLabelIds
+                : [record.id];
               return {
                 id: versionRecord.id,
                 created_at:
@@ -267,7 +322,7 @@ export default withShopifyProxy(
                   versionFields[STUDIO_FIELDS.labelVersions.outputZakekeUrl] || null,
                 session_id: resolveSessionId(
                   versionFields[STUDIO_FIELDS.labelVersions.sessionId],
-                  ...linkedVersionLabelIds.map((labelId) => labelSessionById.get(labelId))
+                  ...sessionSourceLabelIds.map((labelId) => labelSessionById.get(labelId))
                 ),
                 previous_label_version_id:
                   getLinkedIds(

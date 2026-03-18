@@ -868,6 +868,94 @@ test("studio-list returns grouped configurations and label timeline with session
   }
 });
 
+test("studio-list includes current label versions when direct label-version links are missing", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.match(formula, /recCustomerA/);
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labels,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.match(formula, /recCustomerA/);
+      },
+      response: {
+        records: [
+          {
+            id: "recLabelFrontA",
+            createdTime: "2026-02-20T09:00:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.labels.displayName]: "Front Label Thread",
+              [STUDIO_FIELDS.labels.sessionId]: "session-label-1",
+              [STUDIO_FIELDS.labels.labelVersions]: [],
+              [STUDIO_FIELDS.labels.currentFrontLabelVersion]: ["recVersionFrontA"],
+              [STUDIO_FIELDS.labels.savedConfigurations]: [],
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.match(formula, /recLabelFrontA/);
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recVersionFrontA",
+      response: {
+        id: "recVersionFrontA",
+        createdTime: "2026-02-20T09:30:00.000Z",
+        fields: {
+          "Labels: Current Front Label Versions": ["recLabelFrontA"],
+          [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+          [STUDIO_FIELDS.labelVersions.versionKind]: "Initial",
+          [STUDIO_FIELDS.labelVersions.versionNumber]: 1,
+          [STUDIO_FIELDS.labelVersions.outputS3Url]:
+            "https://cdn.example.com/front-v1.png",
+        },
+      },
+    },
+  ]);
+
+  try {
+    const response = await studioList(
+      createProxyEvent({
+        method: "GET",
+        query: {
+          customer_record_id: "recCustomerA",
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.labels.length, 1);
+    assert.equal(payload.labels[0].versions.length, 1);
+    assert.equal(payload.labels[0].versions[0].id, "recVersionFrontA");
+    assert.equal(payload.labels[0].versions[0].session_id, "session-label-1");
+    assert.equal(payload.counts.label_versions, 1);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("studio-configuration returns bootstrap payload with version and session lineage", async () => {
   const fetchMock = installFetchSequence([
     {
