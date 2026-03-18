@@ -11,6 +11,7 @@ import {
   sanitizeText,
   toLinkedRecordArray,
   getFieldValue,
+  getLinkedIds,
   getRecordOrNull,
   updateResilient,
   mapErrorResponse,
@@ -30,6 +31,10 @@ const LABEL_VERSION_FIELD_FALLBACKS = {
   versionKind: ["version_kind", "versionKind"],
   outputImageUrl: ["output_image_url", "outputImageUrl"],
   outputPdfUrl: ["output_pdf_url", "outputPdfUrl"],
+};
+
+const SAVED_CONFIGURATION_FIELD_FALLBACKS = {
+  customer: ["Customers", "customer", "customer_id", "customerId"],
 };
 
 const SAVED_CONFIGURATION_SELECTION_FIELDS = {
@@ -89,6 +94,28 @@ const pickKnownFieldName = (record, candidates = []) => {
   return candidates[0] || null;
 };
 
+const toCreatedTimeMs = (record) => {
+  const createdTime = sanitizeText(record?.createdTime, 64);
+  if (!createdTime) return null;
+  const parsed = Date.parse(createdTime);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const compareRecordsByLatest = (a, b) => {
+  const aCreatedTime = toCreatedTimeMs(a);
+  const bCreatedTime = toCreatedTimeMs(b);
+
+  if (aCreatedTime != null || bCreatedTime != null) {
+    if (aCreatedTime == null) return 1;
+    if (bCreatedTime == null) return -1;
+    if (aCreatedTime !== bCreatedTime) return bCreatedTime - aCreatedTime;
+  }
+
+  const aId = sanitizeText(a?.id, 64) || "";
+  const bId = sanitizeText(b?.id, 64) || "";
+  return bId.localeCompare(aId);
+};
+
 const findSavedConfigurationBySessionId = async (sessionId) => {
   const safeSessionId = escapeFormulaValue(sessionId);
 
@@ -97,10 +124,28 @@ const findSavedConfigurationBySessionId = async (sessionId) => {
     try {
       const page = await listRecords(STUDIO_TABLES.savedConfigurations, {
         filterByFormula: formula,
-        maxRecords: 1,
+        maxRecords: 20,
+        pageSize: 20,
       });
-      const record = Array.isArray(page?.records) ? page.records[0] : null;
-      if (record?.id) return record;
+      const candidates = (Array.isArray(page?.records) ? page.records : []).filter(
+        (record) => record?.id
+      );
+      if (!candidates.length) continue;
+
+      const sortedCandidates = [...candidates].sort(compareRecordsByLatest);
+      const selected = sortedCandidates[0] || null;
+      if (sortedCandidates.length > 1 && selected?.id) {
+        console.warn(
+          "[trace:s3:backend:select-label-version:session-collision]",
+          {
+            sessionId,
+            matchedFieldName: fieldName,
+            candidateRecordIds: sortedCandidates.map((record) => record.id),
+            selectedRecordId: selected.id,
+          }
+        );
+      }
+      if (selected?.id) return selected;
     } catch (error) {
       if (Number(error?.status || 0) === 422) continue;
       throw error;
@@ -157,6 +202,24 @@ const buildSelectedLabelVersion = ({
   designSide,
 });
 
+const getLinkedCustomerIds = (savedConfigurationRecord) => {
+  const linkedIds = getLinkedIds(
+    savedConfigurationRecord,
+    STUDIO_FIELDS.savedConfigurations.customer,
+    SAVED_CONFIGURATION_FIELD_FALLBACKS.customer
+  );
+  if (linkedIds.length) return linkedIds;
+
+  const singleCustomerId = getRecordIdFromFieldValue(
+    getFieldValue(
+      savedConfigurationRecord,
+      STUDIO_FIELDS.savedConfigurations.customer,
+      SAVED_CONFIGURATION_FIELD_FALLBACKS.customer
+    )
+  );
+  return singleCustomerId ? [singleCustomerId] : [];
+};
+
 const createStudioSelectLabelVersionHandler = ({
   parseBodyImpl = parseBody,
   sendJsonImpl = sendJson,
@@ -178,6 +241,15 @@ const createStudioSelectLabelVersionHandler = ({
       const labelVersionRecordId = normalizeRecordId(
         firstNonEmpty(body.labelVersionRecordId, body.label_version_record_id)
       );
+      const customerRecordId = normalizeRecordId(
+        firstNonEmpty(body.customerRecordId, body.customer_record_id)
+      );
+      const savedConfigurationRecordId = normalizeRecordId(
+        firstNonEmpty(
+          body.savedConfigurationRecordId,
+          body.saved_configuration_record_id
+        )
+      );
       const source = sanitizeText(firstNonEmpty(body.source), 80);
       const selectedAt =
         sanitizeText(firstNonEmpty(body.selectedAt, body.selected_at), 64) ||
@@ -187,6 +259,8 @@ const createStudioSelectLabelVersionHandler = ({
         sessionId: sessionId || null,
         designSide: designSide || null,
         labelVersionRecordId: labelVersionRecordId || null,
+        customerRecordId: customerRecordId || null,
+        savedConfigurationRecordId: savedConfigurationRecordId || null,
         source: source || null,
         selectedAt,
       });
@@ -246,12 +320,80 @@ const createStudioSelectLabelVersionHandler = ({
         });
       }
 
-      const savedConfigurationRecord =
-        await findSavedConfigurationBySessionIdImpl(sessionId);
+      const selectedLabelVersion = buildSelectedLabelVersion({
+        labelVersionRecord,
+        selectedAt,
+        source,
+        designSide,
+      });
+
+      let savedConfigurationRecord = null;
+      let savedConfigurationResolution = "session";
+      if (savedConfigurationRecordId) {
+        savedConfigurationResolution = "explicit";
+        savedConfigurationRecord = await getRecordOrNullImpl(
+          STUDIO_TABLES.savedConfigurations,
+          savedConfigurationRecordId
+        );
+        if (!savedConfigurationRecord) {
+          return sendJsonImpl(404, {
+            ok: false,
+            error: "saved_configuration_not_found",
+          });
+        }
+      } else {
+        savedConfigurationRecord =
+          await findSavedConfigurationBySessionIdImpl(sessionId);
+      }
+
       if (!savedConfigurationRecord) {
-        return sendJsonImpl(404, {
+        console.info("[trace:s3:backend:select-label-version:deferred]", {
+          sessionId,
+          designSide,
+          labelVersionRecordId,
+          reason: "saved_configuration_not_found",
+        });
+        return sendJsonImpl(200, {
+          ok: true,
+          idempotent: false,
+          deferred: true,
+          sessionId,
+          designSide,
+          selectedLabelVersion,
+          saved_configuration_record_id: null,
+          savedConfigurationRecordId: null,
+        });
+      }
+
+      const linkedCustomerIds = getLinkedCustomerIds(savedConfigurationRecord);
+      if (
+        customerRecordId &&
+        linkedCustomerIds.length &&
+        !linkedCustomerIds.includes(customerRecordId)
+      ) {
+        return sendJsonImpl(403, {
           ok: false,
-          error: "saved_configuration_not_found",
+          error: "forbidden",
+          message: "This saved configuration does not belong to the current customer.",
+        });
+      }
+
+      const savedConfigurationSessionId = sanitizeText(
+        getFieldValue(
+          savedConfigurationRecord,
+          STUDIO_FIELDS.savedConfigurations.sessionId,
+          SESSION_FIELD_CANDIDATES.slice(1)
+        ),
+        255
+      );
+      if (
+        savedConfigurationSessionId &&
+        savedConfigurationSessionId !== sessionId
+      ) {
+        return sendJsonImpl(409, {
+          ok: false,
+          error: "saved_configuration_session_mismatch",
+          expectedSessionId: savedConfigurationSessionId,
         });
       }
 
@@ -276,17 +418,13 @@ const createStudioSelectLabelVersionHandler = ({
         )
       );
 
-      const selectedLabelVersion = buildSelectedLabelVersion({
-        labelVersionRecord,
-        selectedAt,
-        source,
-        designSide,
-      });
-
       console.info("[trace:s3:backend:select-label-version:resolved]", {
         sessionId,
         designSide,
         labelVersionRecordId,
+        savedConfigurationRecordId: savedConfigurationRecord.id,
+        savedConfigurationResolution,
+        customerRecordId: customerRecordId || null,
         currentSelectedId: currentSelectedId || null,
         candidateOutputImageUrl: selectedLabelVersion.outputImageUrl || null,
         candidateOutputPdfUrl: selectedLabelVersion.outputPdfUrl || null,
@@ -306,6 +444,8 @@ const createStudioSelectLabelVersionHandler = ({
           sessionId,
           designSide,
           selectedLabelVersion,
+          saved_configuration_record_id: savedConfigurationRecord.id,
+          savedConfigurationRecordId: savedConfigurationRecord.id,
         });
       }
 
@@ -343,6 +483,7 @@ const createStudioSelectLabelVersionHandler = ({
         outputImageUrl: selectedLabelVersion.outputImageUrl || null,
         outputPdfUrl: selectedLabelVersion.outputPdfUrl || null,
         savedConfigurationRecordId: savedConfigurationRecord.id,
+        savedConfigurationResolution,
       });
 
       return sendJsonImpl(200, {
@@ -351,6 +492,8 @@ const createStudioSelectLabelVersionHandler = ({
         sessionId,
         designSide,
         selectedLabelVersion,
+        saved_configuration_record_id: savedConfigurationRecord.id,
+        savedConfigurationRecordId: savedConfigurationRecord.id,
       });
     } catch (error) {
       return sendJsonImpl(error?.status || 500, mapErrorResponseImpl(error));
@@ -359,9 +502,10 @@ const createStudioSelectLabelVersionHandler = ({
 
 const studioSelectLabelVersionHandler = createStudioSelectLabelVersionHandler();
 
+export { createStudioSelectLabelVersionHandler, findSavedConfigurationBySessionId };
+
 export default withShopifyProxy(studioSelectLabelVersionHandler, {
   methods: ["POST"],
   allowlist: [process.env.SHOPIFY_STORE_DOMAIN],
   requireShop: true,
 });
-
