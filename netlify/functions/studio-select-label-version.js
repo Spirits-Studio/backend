@@ -220,6 +220,8 @@ const getLinkedCustomerIds = (savedConfigurationRecord) => {
   return singleCustomerId ? [singleCustomerId] : [];
 };
 
+const isLookupUnavailableError = (error) => Number(error?.status || 0) === 403;
+
 const createStudioSelectLabelVersionHandler = ({
   parseBodyImpl = parseBody,
   sendJsonImpl = sendJson,
@@ -329,21 +331,62 @@ const createStudioSelectLabelVersionHandler = ({
 
       let savedConfigurationRecord = null;
       let savedConfigurationResolution = "session";
+      let lookupUnavailableError = null;
       if (savedConfigurationRecordId) {
         savedConfigurationResolution = "explicit";
-        savedConfigurationRecord = await getRecordOrNullImpl(
-          STUDIO_TABLES.savedConfigurations,
-          savedConfigurationRecordId
-        );
-        if (!savedConfigurationRecord) {
-          return sendJsonImpl(404, {
-            ok: false,
-            error: "saved_configuration_not_found",
-          });
+        try {
+          savedConfigurationRecord = await getRecordOrNullImpl(
+            STUDIO_TABLES.savedConfigurations,
+            savedConfigurationRecordId
+          );
+        } catch (error) {
+          if (isLookupUnavailableError(error)) {
+            lookupUnavailableError = error;
+            console.warn(
+              "[trace:s3:backend:select-label-version:lookup-unavailable]",
+              {
+                phase: "explicit_saved_configuration_record_id",
+                sessionId,
+                designSide,
+                savedConfigurationRecordId,
+                message: error?.message || "lookup_unavailable",
+              }
+            );
+          } else {
+            throw error;
+          }
         }
-      } else {
+        if (!savedConfigurationRecord) {
+          if (!lookupUnavailableError) {
+            return sendJsonImpl(404, {
+              ok: false,
+              error: "saved_configuration_not_found",
+            });
+          }
+          savedConfigurationResolution = "session";
+        }
+      }
+
+      if (!savedConfigurationRecord) {
         savedConfigurationRecord =
-          await findSavedConfigurationBySessionIdImpl(sessionId);
+          await (async () => {
+            try {
+              return await findSavedConfigurationBySessionIdImpl(sessionId);
+            } catch (error) {
+              if (!isLookupUnavailableError(error)) throw error;
+              lookupUnavailableError = error;
+              console.warn(
+                "[trace:s3:backend:select-label-version:lookup-unavailable]",
+                {
+                  phase: "session_lookup",
+                  sessionId,
+                  designSide,
+                  message: error?.message || "lookup_unavailable",
+                }
+              );
+              return null;
+            }
+          })();
       }
 
       if (!savedConfigurationRecord) {
@@ -351,7 +394,9 @@ const createStudioSelectLabelVersionHandler = ({
           sessionId,
           designSide,
           labelVersionRecordId,
-          reason: "saved_configuration_not_found",
+          reason: lookupUnavailableError
+            ? "saved_configuration_lookup_unavailable"
+            : "saved_configuration_not_found",
         });
         return sendJsonImpl(200, {
           ok: true,
@@ -362,6 +407,9 @@ const createStudioSelectLabelVersionHandler = ({
           selectedLabelVersion,
           saved_configuration_record_id: null,
           savedConfigurationRecordId: null,
+          deferred_reason: lookupUnavailableError
+            ? "saved_configuration_lookup_unavailable"
+            : "saved_configuration_not_found",
         });
       }
 

@@ -266,3 +266,47 @@ test("select-label-version returns design_side_mismatch when selected version be
   assert.equal(response.payload.error, "design_side_mismatch");
   assert.equal(response.payload.expectedDesignSide, "back");
 });
+
+test("select-label-version returns deferred when saved-configuration lookup is unavailable", async () => {
+  const response = await createHarness({
+    body: {
+      sessionId: "session-lookup-unavailable",
+      designSide: "front",
+      labelVersionRecordId: "recLabelVersionLookupUnavailable",
+      source: "configurator-carousel",
+    },
+    getRecordOrNullImpl: async (table, recordId) => {
+      if (
+        table === STUDIO_TABLES.labelVersions &&
+        recordId === "recLabelVersionLookupUnavailable"
+      ) {
+        return {
+          id: "recLabelVersionLookupUnavailable",
+          fields: {
+            [STUDIO_FIELDS.labelVersions.sessionId]: "session-lookup-unavailable",
+            [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+          },
+        };
+      }
+      return null;
+    },
+    findSavedConfigurationBySessionIdImpl: async () => {
+      const error = new Error(
+        "Airtable GET https://api.airtable.com/v0/appBase/Saved%20Configurations failed with 403"
+      );
+      error.status = 403;
+      throw error;
+    },
+    updateResilientImpl: async () => {
+      throw new Error("update should not happen when lookup is unavailable");
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.payload.ok, true);
+  assert.equal(response.payload.deferred, true);
+  assert.equal(
+    response.payload.deferred_reason,
+    "saved_configuration_lookup_unavailable"
+  );
+});
