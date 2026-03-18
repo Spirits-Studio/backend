@@ -234,7 +234,7 @@ export default withShopifyProxy(
         providedCustomerRecordId,
         body,
         qs,
-        allowCreate: false,
+        allowCreate: true,
         endpoint: "studio-save-configuration",
       });
       const customerRecordId = normalizeRecordId(

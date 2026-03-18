@@ -579,7 +579,7 @@ test("studio-save-configuration maps lite closure and default no-wax value", asy
   }
 });
 
-test("studio-save-configuration returns customer_not_resolved when provided customer id is stale", async () => {
+test("studio-save-configuration auto-creates customer when stale id is provided without identity signals", async () => {
   const fetchMock = installFetchSequence([
     {
       method: "GET",
@@ -597,6 +597,33 @@ test("studio-save-configuration returns customer_not_resolved when provided cust
       },
       response: {
         records: [],
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(
+          fields["Shopify ID"],
+          "legacy_airtable_record:recCustomerLegacyA"
+        );
+      },
+      response: {
+        records: [{ id: "recCustomerRecreatedLegacyA", fields: {} }],
+      },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.savedConfigurations,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
+          "recCustomerRecreatedLegacyA",
+        ]);
+      },
+      response: {
+        records: [{ id: "recSavedConfigurationRecoveredLegacyA", fields: {} }],
       },
     },
   ]);
@@ -617,11 +644,15 @@ test("studio-save-configuration returns customer_not_resolved when provided cust
       })
     );
 
-    assert.equal(response.status, 409);
+    assert.equal(response.status, 200);
     const payload = await response.json();
-    assert.equal(payload.ok, false);
-    assert.equal(payload.error, "customer_not_resolved");
-    assert.equal(payload.provided_customer_record_id, "recCustomerLegacyA");
+    assert.equal(payload.ok, true);
+    assert.equal(payload.customer_record_id, "recCustomerRecreatedLegacyA");
+    assert.equal(payload.customer_record_recovered, true);
+    assert.equal(
+      payload.saved_configuration_record_id,
+      "recSavedConfigurationRecoveredLegacyA"
+    );
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

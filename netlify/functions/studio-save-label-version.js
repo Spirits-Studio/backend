@@ -257,7 +257,7 @@ export const createStudioSaveLabelVersionHandler = ({
         providedCustomerRecordId,
         body,
         qs,
-        allowCreate: false,
+        allowCreate: true,
         endpoint: "studio-save-label-version",
       });
       const customerRecordId = normalizeRecordId(customerResolution?.customerRecordId);

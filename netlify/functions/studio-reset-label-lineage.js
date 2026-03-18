@@ -127,7 +127,7 @@ export const createStudioResetLabelLineageHandler = ({
         providedCustomerRecordId,
         body,
         qs,
-        allowCreate: false,
+        allowCreate: true,
         endpoint: "studio-reset-label-lineage",
       });
       const customerRecordId = normalizeRecordId(customerResolution?.customerRecordId);
