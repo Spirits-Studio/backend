@@ -34,6 +34,7 @@ export const STUDIO_FIELDS = {
     customer: "Customer",
     displayName: "Display Name",
     internalSku: "Internal SKU",
+    shopifyProductId: "Shopify Product ID",
     labelVersions: "Label Versions",
     labels: "Labels",
     liquidSelection: "Liquid Selection",

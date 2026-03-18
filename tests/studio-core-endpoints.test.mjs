@@ -175,6 +175,10 @@ test("studio-save-configuration persists links and session contract", async () =
           fields[STUDIO_FIELDS.savedConfigurations.currentFrontLabelVersion],
           ["recVersionFrontA"]
         );
+        assert.equal(
+          fields[STUDIO_FIELDS.savedConfigurations.shopifyProductId],
+          "987654321"
+        );
         assert.equal(fields[STUDIO_FIELDS.savedConfigurations.closureSelection], "Ebony");
         assert.equal(fields[STUDIO_FIELDS.savedConfigurations.waxSelection], "Pink Rose");
         assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.labels], ["recLabelFrontA"]);
@@ -242,6 +246,7 @@ test("studio-save-configuration persists links and session contract", async () =
           session_id: "session-123",
           status: "Saved",
           preview_url: "https://cdn.example.com/preview.png",
+          shopify_product_id: "987654321",
           shopify_variant_id: "123456789",
           internal_sku: "SKU-TEST-1",
           label_front_version_id: "recVersionFrontA",
@@ -342,6 +347,10 @@ test("studio-save-configuration links all label versions and maps preview/alcoho
           fields[STUDIO_FIELDS.savedConfigurations.previewImageUrl],
           "https://files.example.com/preview.png"
         );
+        assert.equal(
+          fields[STUDIO_FIELDS.savedConfigurations.shopifyProductId],
+          "24680"
+        );
         assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.previewImage], [
           { url: "https://files.example.com/preview.png" },
         ]);
@@ -431,6 +440,7 @@ test("studio-save-configuration links all label versions and maps preview/alcoho
           preview_url: "https://files.example.com/preview.png",
           label_front_version_id: "recVersionFrontCurrent",
           snapshot: {
+            product_id: 24680,
             bottle: { name: "Antica" },
             liquid: { name: "Triple Distilled Vodka" },
             closure: { name: "Beech" },

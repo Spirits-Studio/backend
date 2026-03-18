@@ -568,6 +568,15 @@ export default withShopifyProxy(
         snapshotLiquorName: firstNonEmpty(snapshot?.liquor),
         snapshotLiquidName: firstNonEmpty(snapshot?.liquid?.name),
       });
+      const shopifyProductId = sanitizeText(
+        body.shopify_product_id ??
+          body.shopifyProductId ??
+          snapshot?.shopifyProductId ??
+          snapshot?.shopify_product_id ??
+          snapshot?.productId ??
+          snapshot?.product_id,
+        255
+      );
 
       const sharedRequiredFields = {
         [STUDIO_FIELDS.savedConfigurations.customer]: toLinkedRecordArray(
@@ -594,6 +603,7 @@ export default withShopifyProxy(
           ),
           255
         ),
+        [STUDIO_FIELDS.savedConfigurations.shopifyProductId]: shopifyProductId,
         [STUDIO_FIELDS.savedConfigurations.shopifyVariantId]: sanitizeText(
           firstNonEmpty(
             body.shopify_variant_id,
