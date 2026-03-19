@@ -860,6 +860,32 @@ test("orders webhook creates and links billing address records", async () => {
     },
     {
       method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigBilling",
+      response: {
+        id: "recSavedConfigBilling",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: [
+            "recCanonicalBillingCustomer",
+          ],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "AND(LOWER({Email})='billing@example.com', OR({Shopify ID}=BLANK(), {Shopify ID}=''))"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
       table: STUDIO_TABLES.customers,
       assert: (call) => {
         assert.equal(
@@ -894,32 +920,6 @@ test("orders webhook creates and links billing address records", async () => {
       response: {
         records: [{ id: "recCanonicalBillingCustomer", fields: {} }],
       },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.savedConfigurations,
-      recordId: "recSavedConfigBilling",
-      response: {
-        id: "recSavedConfigBilling",
-        fields: {
-          [STUDIO_FIELDS.savedConfigurations.customer]: [
-            "recCanonicalBillingCustomer",
-          ],
-          [STUDIO_FIELDS.savedConfigurations.labels]: [],
-          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
-        },
-      },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "AND(LOWER({Email})='billing@example.com', OR({Shopify ID}=BLANK(), {Shopify ID}=''))"
-        );
-      },
-      response: { records: [] },
     },
     {
       method: "GET",
@@ -1202,31 +1202,6 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
     },
     {
       method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='9001')"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recCanonicalCustomer",
-            fields: {
-              "Shopify ID": "9001",
-              Email: "guest@example.com",
-              "First Name": "Guest",
-              "Last Name": "Buyer",
-              Source: "Shopify",
-              "Shop Domain": "wnbrmm-sg.myshopify.com",
-            },
-          },
-        ],
-      },
-    },
-    {
-      method: "GET",
       table: STUDIO_TABLES.savedConfigurations,
       recordId: "recSavedConfigA",
       response: {
@@ -1250,6 +1225,31 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
       },
       response: {
         records: [{ id: "recGuestCustomer", fields: { Email: "guest@example.com" } }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='9001')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recCanonicalCustomer",
+            fields: {
+              "Shopify ID": "9001",
+              Email: "guest@example.com",
+              "First Name": "Guest",
+              "Last Name": "Buyer",
+              Source: "Shopify",
+              "Shop Domain": "wnbrmm-sg.myshopify.com",
+            },
+          },
+        ],
       },
     },
     {
@@ -1573,28 +1573,6 @@ test("guest order with _session_id only resolves saved configuration and links o
     },
     {
       method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Email}='guest-session@example.com')"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recCanonicalByEmail",
-            fields: {
-              Email: "guest-session@example.com",
-              Source: "Shopify",
-              "Shop Domain": "wnbrmm-sg.myshopify.com",
-            },
-          },
-        ],
-      },
-    },
-    {
-      method: "GET",
       table: STUDIO_TABLES.savedConfigurations,
       assert: (call) => {
         assert.equal(
@@ -1626,6 +1604,28 @@ test("guest order with _session_id only resolves saved configuration and links o
       },
       response: {
         records: [{ id: "recGuestSession", fields: { Email: "guest-session@example.com" } }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='guest-session@example.com')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recCanonicalByEmail",
+            fields: {
+              Email: "guest-session@example.com",
+              Source: "Shopify",
+              "Shop Domain": "wnbrmm-sg.myshopify.com",
+            },
+          },
+        ],
       },
     },
     {
@@ -1792,6 +1792,226 @@ test("guest order with _session_id only resolves saved configuration and links o
   }
 });
 
+test("orders/paid promotes a single linked guest customer record in place", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_order_paid_promote_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookPromote1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigPromote",
+      response: {
+        id: "recSavedConfigPromote",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestCustomerPromote"],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "AND(LOWER({Email})='marcuswonder@hotmail.co.uk', OR({Shopify ID}=BLANK(), {Shopify ID}=''))"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='10425417531738')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/10425417531738')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='marcuswonder@hotmail.co.uk')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recGuestCustomerPromote",
+      response: {
+        id: "recGuestCustomerPromote",
+        fields: {
+          Source: "Shopify",
+          "Shop Domain": "wnbrmm-sg.myshopify.com",
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recGuestCustomerPromote",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "10425417531738");
+        assert.equal(fields.Email, "marcuswonder@hotmail.co.uk");
+        assert.equal(fields["First Name"], "Marcus");
+        assert.equal(fields["Last Name"], "Smith");
+      },
+      response: {
+        records: [{ id: "recGuestCustomerPromote", fields: {} }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigPromote",
+      response: {
+        id: "recSavedConfigPromote",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestCustomerPromote"],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "{Order ID}='7786796843354'"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.orders.orderId], "7786796843354");
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], [
+          "recGuestCustomerPromote",
+        ]);
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
+          "recSavedConfigPromote",
+        ]);
+      },
+      response: { records: [{ id: "recOrderPromote1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigPromote",
+      response: {
+        id: "recSavedConfigPromote",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestCustomerPromote"],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigPromote",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
+          "recGuestCustomerPromote",
+        ]);
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.status], "Ordered");
+        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.order], [
+          "recOrderPromote1",
+        ]);
+      },
+      response: { records: [{ id: "recSavedConfigPromote", fields: {} }] },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookPromote1",
+      response: { records: [{ id: "recWebhookPromote1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "orders/paid",
+      webhookId: "wh_order_paid_promote_1",
+      payload: {
+        id: 7786796843354,
+        email: "marcuswonder@hotmail.co.uk",
+        customer: {
+          id: 10425417531738,
+          email: "marcuswonder@hotmail.co.uk",
+          first_name: "Marcus",
+          last_name: "Smith",
+        },
+        line_items: [
+          {
+            id: 1,
+            properties: [
+              {
+                name: "_saved_configuration_id",
+                value: "recSavedConfigPromote",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersPaid(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.canonical_customer_record_id, "recGuestCustomerPromote");
+    assert.equal(res.body?.merge_candidates_count, 1);
+    assert.deepEqual(res.body?.merged_customer_pairs, []);
+    assert.equal(res.body?.merged_records_updated, 0);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("customer created after guest order resolves by email and backfills Shopify id", async () => {
   const fetchMock = installFetchSequence([
     {
@@ -1817,6 +2037,17 @@ test("customer created after guest order resolves by email and backfills Shopify
         assert.equal(
           call.url.searchParams.get("filterByFormula"),
           "({Shopify ID}='7001')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/7001')"
         );
       },
       response: { records: [] },
@@ -1917,12 +2148,23 @@ test("customer email changes are synced on customers/update", async () => {
           "({Shopify ID}='7002')"
         );
       },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/7002')"
+        );
+      },
       response: {
         records: [
           {
             id: "recCanonicalExisting",
             fields: {
-              "Shopify ID": "7002",
+              "Shopify ID": "gid://shopify/Customer/7002",
               Email: "old-email@example.com",
             },
           },
@@ -1935,6 +2177,7 @@ test("customer email changes are synced on customers/update", async () => {
       recordId: "recCanonicalExisting",
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "7002");
         assert.equal(fields.Email, "new-email@example.com");
       },
       response: { records: [{ id: "recCanonicalExisting", fields: {} }] },
@@ -2184,7 +2427,7 @@ test("canonical merge handles multiple guest records", async () => {
   }
 });
 
-test("merge marker persistence failure throws when merge fields are missing", async () => {
+test("merge tolerates missing customer merge marker fields", async () => {
   const fetchMock = installFetchSequence([
     {
       method: "GET",
@@ -2230,16 +2473,14 @@ test("merge marker persistence failure throws when merge fields are missing", as
   ]);
 
   try {
-    await assert.rejects(
-      mergeGuestCustomersIntoCanonical({
-        canonicalCustomerRecordId: "recCanonicalMain",
-        guestCustomerRecordIds: ["recGuestNoMarker"],
-      }),
-      (error) => {
-        assert.equal(error?.code, "merge_marker_not_persisted");
-        return true;
-      }
-    );
+    const result = await mergeGuestCustomersIntoCanonical({
+      canonicalCustomerRecordId: "recCanonicalMain",
+      guestCustomerRecordIds: ["recGuestNoMarker"],
+    });
+    assert.deepEqual(result.mergedPairs, ["recGuestNoMarker->recCanonicalMain"]);
+    assert.equal(result.relinkedSavedConfigurations, 0);
+    assert.equal(result.relinkedLabels, 0);
+    assert.equal(result.relinkedOrders, 0);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

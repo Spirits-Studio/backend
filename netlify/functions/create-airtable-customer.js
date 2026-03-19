@@ -1,5 +1,9 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { findOneBy, createOne, updateOne, getOne } from "../../src/lib/airtable.js";
+import {
+  normalizeShopifyCustomerId,
+  buildShopifyCustomerIdLookupValues,
+} from "./_lib/studio.js";
 
 const send = (status, obj) =>
   new Response(JSON.stringify(obj), {
@@ -63,7 +67,9 @@ export default withShopifyProxy(
       const body = await parseBody(arg, method, isV2) || {};
 
       // Prefer HMAC-signed query params from the App Proxy URL; fall back to body.
-      const customerId = pick(qs, body, "customer_id", "customerId");
+      const customerId = normalizeShopifyCustomerId(
+        pick(qs, body, "customer_id", "customerId")
+      );
       const email = pick(qs, body, "email", "customer_email", "customerEmail");
       const firstName = pick(qs, body, "first_name", "firstName");
       const lastName = pick(qs, body, "last_name", "lastName");
@@ -129,8 +135,17 @@ export default withShopifyProxy(
         let matchedBy = null;
 
         if (customerId) {
-          record = await findOneBy(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, "Shopify ID", customerId);
-          matchedBy = record ? "shopify_id" : null;
+          for (const lookupValue of buildShopifyCustomerIdLookupValues(customerId)) {
+            record = await findOneBy(
+              process.env.AIRTABLE_CUSTOMERS_TABLE_ID,
+              "Shopify ID",
+              lookupValue
+            );
+            if (record) {
+              matchedBy = "shopify_id";
+              break;
+            }
+          }
         }
         if (!record && email) {
           record = await findOneBy(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, "Email", email);

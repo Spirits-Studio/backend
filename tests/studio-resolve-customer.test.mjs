@@ -5,7 +5,7 @@ process.env.AIRTABLE_BASE_ID = "appTestBase";
 process.env.AIRTABLE_TOKEN = "patTestToken";
 process.env.AIRTABLE_CUSTOMERS_TABLE_ID = "Customers";
 
-const { resolveCustomerRecordIdOrCreate } = await import(
+const { resolveCustomerRecordIdOrCreate, normalizeShopifyCustomerId } = await import(
   "../netlify/functions/_lib/studio.js"
 );
 
@@ -48,6 +48,13 @@ const installFetchSequence = (steps) => {
   };
 };
 
+test("normalizeShopifyCustomerId canonicalizes customer gids to numeric strings", () => {
+  assert.equal(normalizeShopifyCustomerId("gid://shopify/Customer/123"), "123");
+  assert.equal(normalizeShopifyCustomerId("123"), "123");
+  assert.equal(normalizeShopifyCustomerId("recCustomer123"), null);
+  assert.equal(normalizeShopifyCustomerId("not-a-shopify-id"), null);
+});
+
 test("resolveCustomerRecordIdOrCreate recovers when provided record lookup returns Airtable 403 invalid model", async () => {
   const fetchMock = installFetchSequence([
     {
@@ -62,20 +69,6 @@ test("resolveCustomerRecordIdOrCreate recovers when provided record lookup retur
           message:
             "Invalid permissions, or the requested model was not found.",
         },
-      },
-    },
-    {
-      method: "GET",
-      assert: ({ url }) => {
-        assert.equal(url.pathname, "/v0/appTestBase/Customers");
-        assert.equal(url.searchParams.get("maxRecords"), "1");
-        assert.equal(
-          url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='legacy_airtable_record:recStaleCustomer')"
-        );
-      },
-      response: {
-        records: [],
       },
     },
     {
@@ -110,12 +103,94 @@ test("resolveCustomerRecordIdOrCreate recovers when provided record lookup retur
   }
 });
 
+test("resolveCustomerRecordIdOrCreate falls back to legacy gid matches for Shopify ID lookups", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
+      },
+      status: 404,
+      response: {
+        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        assert.equal(url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='123')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        assert.equal(url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/123')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recLegacyGidCustomer",
+            fields: { "Shopify ID": "gid://shopify/Customer/123" },
+          },
+        ],
+      },
+    },
+  ]);
+
+  try {
+    const result = await resolveCustomerRecordIdOrCreate({
+      providedCustomerRecordId: "recStaleCustomer",
+      body: {
+        shopify_customer_id: "gid://shopify/Customer/123",
+      },
+      qs: {},
+    });
+
+    assert.equal(result.customerRecordId, "recLegacyGidCustomer");
+    assert.equal(result.created, false);
+    assert.equal(result.recovered, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("resolveCustomerRecordIdOrCreate can create when customer searches are denied but writes are allowed", async () => {
   const fetchMock = installFetchSequence([
     {
       method: "GET",
       assert: ({ url }) => {
         assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
+      },
+      status: 403,
+      response: {
+        error: {
+          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
+          message:
+            "Invalid permissions, or the requested model was not found.",
+        },
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers");
+        assert.equal(url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='123')"
+        );
       },
       status: 403,
       response: {
@@ -152,25 +227,6 @@ test("resolveCustomerRecordIdOrCreate can create when customer searches are deni
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
           url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='legacy_airtable_record:recStaleCustomer')"
-        );
-      },
-      status: 403,
-      response: {
-        error: {
-          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
-          message:
-            "Invalid permissions, or the requested model was not found.",
-        },
-      },
-    },
-    {
-      method: "GET",
-      assert: ({ url }) => {
-        assert.equal(url.pathname, "/v0/appTestBase/Customers");
-        assert.equal(url.searchParams.get("maxRecords"), "1");
-        assert.equal(
-          url.searchParams.get("filterByFormula"),
           "({Email}='user@example.com')"
         );
       },
@@ -189,7 +245,7 @@ test("resolveCustomerRecordIdOrCreate can create when customer searches are deni
         assert.equal(url.pathname, "/v0/appTestBase/Customers");
         const parsed = JSON.parse(String(body || "{}"));
         const fields = parsed?.records?.[0]?.fields || {};
-        assert.equal(fields["Shopify ID"], "gid://shopify/Customer/123");
+        assert.equal(fields["Shopify ID"], "123");
         assert.equal(fields.Email, "user@example.com");
       },
       response: {
@@ -238,7 +294,7 @@ test("resolveCustomerRecordIdOrCreate auto-creates after confirmed misses when i
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
           url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='gid://shopify/Customer/123')"
+          "({Shopify ID}='123')"
         );
       },
       response: {
@@ -252,7 +308,7 @@ test("resolveCustomerRecordIdOrCreate auto-creates after confirmed misses when i
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
           url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='legacy_airtable_record:recStaleCustomer')"
+          "({Shopify ID}='gid://shopify/Customer/123')"
         );
       },
       response: {
@@ -265,7 +321,7 @@ test("resolveCustomerRecordIdOrCreate auto-creates after confirmed misses when i
         assert.equal(url.pathname, "/v0/appTestBase/Customers");
         const parsed = JSON.parse(String(body || "{}"));
         const fields = parsed?.records?.[0]?.fields || {};
-        assert.equal(fields["Shopify ID"], "gid://shopify/Customer/123");
+        assert.equal(fields["Shopify ID"], "123");
       },
       response: {
         records: [{ id: "recCreatedAfterConfirmedMiss", fields: {} }],
@@ -310,7 +366,7 @@ test("resolveCustomerRecordIdOrCreate does not auto-create when lookup certainty
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
           url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='gid://shopify/Customer/123')"
+          "({Shopify ID}='123')"
         );
       },
       status: 403,
@@ -329,7 +385,7 @@ test("resolveCustomerRecordIdOrCreate does not auto-create when lookup certainty
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
           url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='legacy_airtable_record:recStaleCustomer')"
+          "({Shopify ID}='gid://shopify/Customer/123')"
         );
       },
       status: 403,

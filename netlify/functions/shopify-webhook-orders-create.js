@@ -158,6 +158,11 @@ export const createShopifyWebhookOrdersHandler = ({
     }
 
     try {
+      const signals = await collectOrderSignals(envelope.payload || {});
+      const mergeCandidates = Array.isArray(signals?.candidateCustomerRecordIds)
+        ? signals.candidateCustomerRecordIds
+        : [];
+
       const canonicalCustomer = await upsertCanonicalCustomer({
         shopifyId: order?.customer?.shopify_id,
         email: order?.customer?.email || order?.email,
@@ -165,15 +170,12 @@ export const createShopifyWebhookOrdersHandler = ({
         lastName: order?.customer?.last_name,
         phone: order?.customer?.phone,
         shopDomain: envelope?.shop_domain,
+        preferredCustomerRecordIds: mergeCandidates,
       });
       const canonicalCustomerRecordId = normalizeRecordId(
         canonicalCustomer?.customerRecordId
       );
 
-      const signals = await collectOrderSignals(envelope.payload || {});
-      const mergeCandidates = Array.isArray(signals?.candidateCustomerRecordIds)
-        ? signals.candidateCustomerRecordIds
-        : [];
       const mergeResult = canonicalCustomerRecordId
         ? await mergeGuestCustomersIntoCanonical({
             canonicalCustomerRecordId,

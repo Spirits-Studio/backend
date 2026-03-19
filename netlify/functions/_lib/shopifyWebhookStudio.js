@@ -5,6 +5,8 @@ import {
   STUDIO_FIELD_FALLBACKS,
   STUDIO_SINGLE_SELECT_OPTIONS,
   firstNonEmpty,
+  buildShopifyCustomerIdLookupValues,
+  normalizeShopifyCustomerId,
   normalizeRecordId,
   normalizeOrderStatus,
   normalizeSavedConfigurationStatusFromOrderStatus,
@@ -33,13 +35,6 @@ export const normalizeEmail = (value) => {
   const text = normalizeText(value, 255);
   if (!text || !text.includes("@")) return null;
   return text.toLowerCase();
-};
-
-export const normalizeShopifyCustomerId = (value) => {
-  const text = normalizeText(value, 255);
-  if (!text) return null;
-  if (text.startsWith("rec")) return null;
-  return text;
 };
 
 const normalizePhone = (value) => normalizeText(value, 60);
@@ -609,12 +604,14 @@ export const upsertCanonicalCustomer = async ({
   phone,
   shopDomain,
   creationSource = null,
+  preferredCustomerRecordIds = [],
 }) => {
   const normalizedShopifyId = normalizeShopifyCustomerId(shopifyId);
   const normalizedEmail = normalizeEmail(email);
   const normalizedFirstName = normalizeName(firstName);
   const normalizedLastName = normalizeName(lastName);
   const normalizedPhone = normalizePhone(phone);
+  const normalizedShopDomain = normalizeText(shopDomain, 255);
   const normalizedCreationSource = normalizeCustomerCreationSource(creationSource);
 
   if (!normalizedShopifyId && !normalizedEmail) {
@@ -630,17 +627,40 @@ export const upsertCanonicalCustomer = async ({
   let matchedBy = null;
 
   if (normalizedShopifyId) {
-    existing = await findOneBy(
-      STUDIO_TABLES.customers,
-      "Shopify ID",
+    for (const lookupValue of buildShopifyCustomerIdLookupValues(
       normalizedShopifyId
-    );
-    if (existing?.id) matchedBy = "shopify_id";
+    )) {
+      existing = await findOneBy(STUDIO_TABLES.customers, "Shopify ID", lookupValue);
+      if (existing?.id) {
+        matchedBy = "shopify_id";
+        break;
+      }
+    }
   }
 
   if (!existing?.id && normalizedEmail) {
     existing = await findOneBy(STUDIO_TABLES.customers, "Email", normalizedEmail);
     if (existing?.id) matchedBy = "email";
+  }
+
+  if (!existing?.id) {
+    const preferredIds = uniqueRecordIds(preferredCustomerRecordIds);
+    if (preferredIds.length === 1) {
+      const preferred = await getRecordOrNull(STUDIO_TABLES.customers, preferredIds[0]);
+      const currentShopifyId = normalizeShopifyCustomerId(
+        preferred?.fields?.["Shopify ID"]
+      );
+      const currentEmail = normalizeEmail(preferred?.fields?.Email);
+      const shopifyIdCompatible =
+        !currentShopifyId || currentShopifyId === normalizedShopifyId;
+      const emailCompatible =
+        !currentEmail || !normalizedEmail || currentEmail === normalizedEmail;
+
+      if (preferred?.id && shopifyIdCompatible && emailCompatible) {
+        existing = preferred;
+        matchedBy = "preferred_record";
+      }
+    }
   }
 
   const canonicalFields = {
@@ -650,7 +670,7 @@ export const upsertCanonicalCustomer = async ({
     "Last Name": normalizedLastName || undefined,
     Phone: normalizedPhone || undefined,
     Source: "Shopify",
-    "Shop Domain": normalizeText(shopDomain, 255) || undefined,
+    "Shop Domain": normalizedShopDomain || undefined,
     "Creation Source": normalizedCreationSource || undefined,
   };
 
@@ -679,7 +699,6 @@ export const upsertCanonicalCustomer = async ({
     if (currentFields.Source !== "Shopify") {
       updates.Source = "Shopify";
     }
-    const normalizedShopDomain = normalizeText(shopDomain, 255);
     if (normalizedShopDomain && currentFields["Shop Domain"] !== normalizedShopDomain) {
       updates["Shop Domain"] = normalizedShopDomain;
     }
@@ -797,6 +816,10 @@ const markGuestCustomerAsMerged = async ({
     ? updated.fields["Merged Into Customer"].map((entry) => normalizeRecordId(entry))
     : [];
   const persistedMergedAt = String(updated?.fields?.["Merged At"] || "").trim();
+  const hasAnyMergeMarkers =
+    Object.hasOwn(updated?.fields || {}, "Merge Status") ||
+    Object.hasOwn(updated?.fields || {}, "Merged Into Customer") ||
+    Object.hasOwn(updated?.fields || {}, "Merged At");
 
   const isMarkedMerged =
     persistedStatus === "merged" &&
@@ -804,13 +827,17 @@ const markGuestCustomerAsMerged = async ({
     persistedMergedInto.includes(mergedInto[0]) &&
     Boolean(persistedMergedAt);
 
+  // Merge markers are optional metadata. The canonical merge is the relink itself.
+  if (!hasAnyMergeMarkers) return;
+
   if (!isMarkedMerged) {
-    const err = new Error(
-      "Customers merge marker fields were not persisted. Ensure 'Merge Status', 'Merged Into Customer', and 'Merged At' exist and are writable."
-    );
-    err.code = "merge_marker_not_persisted";
-    err.guestCustomerRecordId = guestCustomerRecordId;
-    throw err;
+    console.warn("[shopify-webhook] customer merge markers incomplete", {
+      guest_customer_record_id: guestCustomerRecordId,
+      canonical_customer_record_id: canonicalCustomerRecordId,
+      persisted_status: persistedStatus || null,
+      persisted_merged_into: persistedMergedInto,
+      persisted_merged_at: persistedMergedAt || null,
+    });
   }
 };
 

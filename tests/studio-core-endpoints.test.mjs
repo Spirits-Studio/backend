@@ -7,6 +7,7 @@ process.env.SHOPIFY_STORE_DOMAIN = "spiritsstudio.co.uk";
 process.env.SHOPIFY_WEBHOOK_SECRET = "test-webhook-secret";
 process.env.AIRTABLE_BASE_ID = "appTestBase";
 process.env.AIRTABLE_TOKEN = "patTestToken";
+process.env.AIRTABLE_CUSTOMERS_TABLE_ID = "Customers";
 process.env.AIRTABLE_ORDERS_FULFILLMENT_TABLE_ID = "Orders & Fulfilment";
 
 const { default: studioSaveConfiguration } = await import(
@@ -15,6 +16,9 @@ const { default: studioSaveConfiguration } = await import(
 const { default: studioList } = await import("../netlify/functions/studio-list.js");
 const { default: studioConfiguration } = await import(
   "../netlify/functions/studio-configuration.js"
+);
+const { default: createAirtableCustomer } = await import(
+  "../netlify/functions/create-airtable-customer.js"
 );
 const { STUDIO_FIELDS, STUDIO_TABLES } = await import(
   "../netlify/functions/_lib/studio.js"
@@ -270,6 +274,142 @@ test("studio-save-configuration persists links and session contract", async () =
     assert.equal(payload.session_id, "session-123");
     assert.equal(payload.label_front_record_id, "recLabelFrontA");
     assert.equal(payload.label_front_version_id, "recVersionFrontA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("create-airtable-customer stores Shopify customer ids in numeric form", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='9001')");
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='gid://shopify/Customer/9001')");
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Email}='legacy@example.com')");
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "9001");
+        assert.equal(fields.Email, "legacy@example.com");
+        assert.equal(fields["First Name"], "Legacy");
+        assert.equal(fields["Last Name"], "User");
+      },
+      response: {
+        records: [{ id: "recCreatedCustomer9001", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const response = await createAirtableCustomer(
+      createProxyEvent({
+        method: "POST",
+        query: {
+          customer_id: "gid://shopify/Customer/9001",
+          email: "legacy@example.com",
+          first_name: "Legacy",
+          last_name: "User",
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.airtableId, "recCreatedCustomer9001");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("create-airtable-customer backfills legacy gid customer records to numeric IDs", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='9002')");
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='gid://shopify/Customer/9002')");
+      },
+      response: {
+        records: [
+          {
+            id: "recLegacyCustomer9002",
+            fields: {
+              "Shopify ID": "gid://shopify/Customer/9002",
+              Email: "legacy@example.com",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const id = call.body?.records?.[0]?.id;
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(id, "recLegacyCustomer9002");
+        assert.equal(fields["Shopify ID"], "9002");
+        assert.equal(fields.Source, "Shopify");
+        assert.equal(fields["Shop Domain"], "spiritsstudio.co.uk");
+      },
+      response: {
+        records: [{ id: "recLegacyCustomer9002", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const response = await createAirtableCustomer(
+      createProxyEvent({
+        method: "POST",
+        query: {
+          customer_id: "gid://shopify/Customer/9002",
+          email: "legacy@example.com",
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.airtableId, "recLegacyCustomer9002");
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
@@ -599,25 +739,11 @@ test("studio-save-configuration auto-creates customer when stale id is provided 
       response: { error: { message: "NOT_FOUND" } },
     },
     {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.match(formula, /legacy_airtable_record:recCustomerLegacyA/);
-      },
-      response: {
-        records: [],
-      },
-    },
-    {
       method: "POST",
       table: STUDIO_TABLES.customers,
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
-        assert.equal(
-          fields["Shopify ID"],
-          "legacy_airtable_record:recCustomerLegacyA"
-        );
+        assert.equal(fields["Shopify ID"], undefined);
       },
       response: {
         records: [{ id: "recCustomerRecreatedLegacyA", fields: {} }],
@@ -683,7 +809,7 @@ test("studio-save-configuration auto-creates customer for stale id when signed i
       table: STUDIO_TABLES.customers,
       assert: (call) => {
         const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(formula, "({Shopify ID}='gid://shopify/Customer/9001')");
+        assert.equal(formula, "({Shopify ID}='9001')");
       },
       response: {
         records: [],
@@ -694,7 +820,7 @@ test("studio-save-configuration auto-creates customer for stale id when signed i
       table: STUDIO_TABLES.customers,
       assert: (call) => {
         const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(formula, "({Shopify ID}='legacy_airtable_record:recCustomerLegacyB')");
+        assert.equal(formula, "({Shopify ID}='gid://shopify/Customer/9001')");
       },
       response: {
         records: [],
@@ -716,7 +842,7 @@ test("studio-save-configuration auto-creates customer for stale id when signed i
       table: STUDIO_TABLES.customers,
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
-        assert.equal(fields["Shopify ID"], "gid://shopify/Customer/9001");
+        assert.equal(fields["Shopify ID"], "9001");
         assert.equal(fields.Email, "legacy@example.com");
       },
       response: {

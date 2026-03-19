@@ -539,22 +539,27 @@ const isAirtableLookupRecoverableError = (error) => {
   return false;
 };
 
-const normalizeShopifyIdValue = (value) => {
+export const normalizeShopifyCustomerId = (value) => {
   const text = sanitizeCustomerIdentityValue(value, 255);
   if (!text) return null;
-  return normalizeRecordId(text) ? null : text;
+  if (normalizeRecordId(text)) return null;
+
+  const gidMatch = text.match(/^gid:\/\/shopify\/Customer\/(\d+)(?:\?.*)?$/i);
+  if (gidMatch) return gidMatch[1];
+
+  return /^\d+$/.test(text) ? text : null;
+};
+
+export const buildShopifyCustomerIdLookupValues = (value) => {
+  const normalized = normalizeShopifyCustomerId(value);
+  if (!normalized) return [];
+  return [normalized, `gid://shopify/Customer/${normalized}`];
 };
 
 const normalizeEmailValue = (value) => {
   const text = sanitizeCustomerIdentityValue(value, 255);
   if (!text || !text.includes("@")) return null;
   return text.toLowerCase();
-};
-
-const buildLegacyShopifyIdAlias = (missingRecordId) => {
-  const recId = normalizeRecordId(missingRecordId);
-  if (!recId) return null;
-  return `legacy_airtable_record:${recId}`.slice(0, 255);
 };
 
 const resolveCustomerIdentity = ({ body = {}, qs = {} } = {}) => {
@@ -583,7 +588,7 @@ const resolveCustomerIdentity = ({ body = {}, qs = {} } = {}) => {
 
   let shopifyId = null;
   for (const candidate of shopifyIdCandidates) {
-    shopifyId = normalizeShopifyIdValue(candidate);
+    shopifyId = normalizeShopifyCustomerId(candidate);
     if (shopifyId) break;
   }
 
@@ -694,11 +699,9 @@ export const resolveCustomerRecordIdOrCreate = async ({
     }
   }
 
-  const legacyAlias = buildLegacyShopifyIdAlias(providedRecordId);
-  const shopifySearchCandidates = [
-    identity.shopifyId,
-    identity.shopifyId !== legacyAlias ? legacyAlias : null,
-  ].filter(Boolean);
+  const shopifySearchCandidates = buildShopifyCustomerIdLookupValues(
+    identity.shopifyId
+  );
 
   for (const shopifyId of shopifySearchCandidates) {
     const matchedResult = await findCustomerByField("Shopify ID", shopifyId);
@@ -761,7 +764,7 @@ export const resolveCustomerRecordIdOrCreate = async ({
     STUDIO_TABLES.customers,
     {},
     {
-      "Shopify ID": identity.shopifyId || legacyAlias || undefined,
+      "Shopify ID": identity.shopifyId || undefined,
       Email: identity.email || undefined,
       "First Name": identity.firstName || undefined,
       "Last Name": identity.lastName || undefined,
