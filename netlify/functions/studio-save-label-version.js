@@ -1,5 +1,4 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { listRecords } from "../../src/lib/airtable.js";
 import {
   STUDIO_TABLES,
   STUDIO_FIELDS,
@@ -21,11 +20,16 @@ import {
   createResilient,
   updateResilient,
   getRecordOrNull,
+  listRecordsByLinkedRecordIds,
   resolveCustomerRecordIdOrCreate,
   mapErrorResponse,
 } from "./_lib/studio.js";
 
 const sideToTitle = (side) => (side === "back" ? "Back" : "Front");
+const LABEL_VERSION_LABEL_FIELD_FALLBACKS = [
+  "Labels: Current Front Label Versions",
+  "Labels: Current Back Label Versions",
+];
 
 const toVersionNumber = (value) => {
   const num = Number(value);
@@ -149,14 +153,17 @@ const parsePayloadInputs = (body = {}) => {
 };
 
 async function computeNextVersionNumber(labelRecordId) {
-  const formula = `FIND('${labelRecordId}', ARRAYJOIN({${STUDIO_FIELDS.labelVersions.labels}}))`;
-  const res = await listRecords(STUDIO_TABLES.labelVersions, {
-    filterByFormula: formula,
-    sort: [{ field: STUDIO_FIELDS.labelVersions.versionNumber, direction: "desc" }],
-    maxRecords: 1,
+  const rows = await listRecordsByLinkedRecordIds(STUDIO_TABLES.labelVersions, {
+    fieldName: STUDIO_FIELDS.labelVersions.labels,
+    linkedRecordIds: labelRecordId,
+    fallbackFieldNames: LABEL_VERSION_LABEL_FIELD_FALLBACKS,
   });
-  const existing = res?.records?.[0]?.fields?.[STUDIO_FIELDS.labelVersions.versionNumber];
-  const current = toVersionNumber(existing) || 0;
+  const current = rows.reduce((maxVersion, record) => {
+    const versionNumber = toVersionNumber(
+      record?.fields?.[STUDIO_FIELDS.labelVersions.versionNumber]
+    );
+    return versionNumber && versionNumber > maxVersion ? versionNumber : maxVersion;
+  }, 0);
   return current + 1;
 }
 

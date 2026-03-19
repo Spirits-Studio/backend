@@ -60,9 +60,10 @@ test("reset-label-lineage deletes prior lineage and returns a new label head", a
       }
       throw new Error(`Unexpected lookup: ${table}/${recordId}`);
     },
-    listAllRecordsImpl: async (table, { filterByFormula }) => {
+    listRecordsByLinkedRecordIdsImpl: async (table, { fieldName, linkedRecordIds }) => {
       assert.equal(table, STUDIO_TABLES.labelVersions);
-      assert.match(String(filterByFormula || ""), /recLabelOwned/);
+      assert.equal(fieldName, STUDIO_FIELDS.labelVersions.labels);
+      assert.equal(linkedRecordIds, "recLabelOwned");
       return [
         {
           id: "recVersion1",
@@ -197,7 +198,7 @@ test("reset-label-lineage is idempotent per customer+side+idempotency key", asyn
         },
       };
     },
-    listAllRecordsImpl: async () => [
+    listRecordsByLinkedRecordIdsImpl: async () => [
       {
         id: "recVersion1",
         fields: {

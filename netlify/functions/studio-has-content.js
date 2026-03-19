@@ -6,8 +6,7 @@ import {
   parseBody,
   firstNonEmpty,
   normalizeRecordId,
-  listAllRecords,
-  buildLinkedCustomerFormula,
+  listRecordsByLinkedRecordIds,
   mapErrorResponse,
 } from "./_lib/studio.js";
 
@@ -28,23 +27,16 @@ export default withShopifyProxy(
         return sendJson(200, { ok: true, has_content: false });
       }
 
-      const savedConfigFormula = buildLinkedCustomerFormula(
-        STUDIO_FIELDS.savedConfigurations.customer,
-        customerRecordId
-      );
-      const labelFormula = buildLinkedCustomerFormula(
-        STUDIO_FIELDS.labels.customers,
-        customerRecordId
-      );
-
       const [savedConfigs, labels] = await Promise.all([
-        listAllRecords(STUDIO_TABLES.savedConfigurations, {
-          filterByFormula: savedConfigFormula,
-          maxRecords: 1,
+        listRecordsByLinkedRecordIds(STUDIO_TABLES.savedConfigurations, {
+          fieldName: STUDIO_FIELDS.savedConfigurations.customer,
+          linkedRecordIds: customerRecordId,
+          maxMatches: 1,
         }),
-        listAllRecords(STUDIO_TABLES.labels, {
-          filterByFormula: labelFormula,
-          maxRecords: 1,
+        listRecordsByLinkedRecordIds(STUDIO_TABLES.labels, {
+          fieldName: STUDIO_FIELDS.labels.customers,
+          linkedRecordIds: customerRecordId,
+          maxMatches: 1,
         }),
       ]);
 

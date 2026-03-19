@@ -1,5 +1,4 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { escapeFormulaValue } from "../../src/lib/airtable.js";
 import {
   STUDIO_TABLES,
   STUDIO_FIELDS,
@@ -8,11 +7,10 @@ import {
   parseBody,
   firstNonEmpty,
   normalizeRecordId,
-  listAllRecords,
   getRecordOrNull,
-  buildLinkedCustomerFormula,
   getFieldValue,
   getLinkedIds,
+  listRecordsByLinkedRecordIds,
   sanitizeText,
   mapErrorResponse,
 } from "./_lib/studio.js";
@@ -36,39 +34,63 @@ const resolveSessionId = (...values) => {
   return null;
 };
 
-const buildFormula = ({ customerRecordId, bottleFilter, statusFilter }) => {
-  const clauses = [
-    buildLinkedCustomerFormula(
-      STUDIO_FIELDS.savedConfigurations.customer,
-      customerRecordId
-    ),
-  ];
-
-  if (bottleFilter) {
-    const safe = escapeFormulaValue(bottleFilter.toLowerCase());
-    clauses.push(
-      `LOWER({${STUDIO_FIELDS.savedConfigurations.bottleSelection}})='${safe}'`
-    );
-  }
-
-  if (statusFilter) {
-    const safe = escapeFormulaValue(statusFilter.toLowerCase());
-    clauses.push(`LOWER({${STUDIO_FIELDS.savedConfigurations.status}})='${safe}'`);
-  }
-
-  if (clauses.length === 1) return clauses[0];
-  return `AND(${clauses.join(",")})`;
+const matchesTextFilter = (value, expected) => {
+  if (!expected) return true;
+  return toText(value).toLowerCase() === expected;
 };
 
-const buildVersionsFormula = (labelRecordIds = []) => {
-  const clauses = labelRecordIds
-    .map((id) => normalizeRecordId(id))
-    .filter(Boolean)
-    .map((id) => `FIND('${escapeFormulaValue(id)}', ARRAYJOIN({${STUDIO_FIELDS.labelVersions.labels}}))`);
-  if (!clauses.length) return null;
-  if (clauses.length === 1) return clauses[0];
-  return `OR(${clauses.join(",")})`;
+const summarizeIds = (values = [], limit = 10) => {
+  const ids = Array.isArray(values) ? values.filter(Boolean) : [];
+  return {
+    count: ids.length,
+    ids: ids.slice(0, limit),
+    truncated: ids.length > limit,
+  };
 };
+
+const summarizeCustomerRecord = (record) => {
+  const fields = record?.fields || {};
+  return {
+    found: Boolean(record?.id),
+    id: record?.id || null,
+    shopify_id: fields["Shopify ID"] || null,
+    source: fields.Source || null,
+    email_present: Boolean(fields.Email),
+    phone_present: Boolean(fields.Phone),
+  };
+};
+
+const summarizeLabelRecord = (record) => ({
+  id: record?.id || null,
+  session_id: resolveSessionId(record?.fields?.[STUDIO_FIELDS.labels.sessionId]),
+  customer_ids: getLinkedIds(record, STUDIO_FIELDS.labels.customers),
+  direct_version_ids: getLinkedIds(record, STUDIO_FIELDS.labels.labelVersions),
+  current_front_version_id:
+    getLinkedIds(
+      record,
+      STUDIO_FIELDS.labels.currentFrontLabelVersion,
+      STUDIO_FIELD_FALLBACKS.labels.currentFrontLabelVersion
+    )[0] || null,
+  current_back_version_id:
+    getLinkedIds(
+      record,
+      STUDIO_FIELDS.labels.currentBackLabelVersion,
+      STUDIO_FIELD_FALLBACKS.labels.currentBackLabelVersion
+    )[0] || null,
+});
+
+const summarizeVersionRecord = (record) => ({
+  id: record?.id || null,
+  label_ids: getLinkedIds(
+    record,
+    STUDIO_FIELDS.labelVersions.labels,
+    LABEL_VERSION_LABEL_FIELD_FALLBACKS
+  ),
+  design_side: record?.fields?.[STUDIO_FIELDS.labelVersions.designSide] || null,
+  version_kind: record?.fields?.[STUDIO_FIELDS.labelVersions.versionKind] || null,
+  version_number: record?.fields?.[STUDIO_FIELDS.labelVersions.versionNumber] || null,
+  session_id: resolveSessionId(record?.fields?.[STUDIO_FIELDS.labelVersions.sessionId]),
+});
 
 const PREVIOUS_LABEL_VERSION_FIELD_FALLBACKS = ["Previous Label Versions"];
 const LABEL_VERSION_LABEL_FIELD_FALLBACKS = [
@@ -78,9 +100,17 @@ const LABEL_VERSION_LABEL_FIELD_FALLBACKS = [
 
 export default withShopifyProxy(
   async (arg, { qs, isV2, method }) => {
+    let customerRecordId = null;
     try {
       const body = (await parseBody(arg, method, isV2)) || {};
-      const customerRecordId = normalizeRecordId(
+      const rawCustomerRecordId = firstNonEmpty(
+        qs.customer_record_id,
+        qs.customer_id,
+        body.customer_record_id,
+        body.customer_id,
+        body.ss_customer_airtable_id
+      );
+      customerRecordId = normalizeRecordId(
         firstNonEmpty(
           qs.customer_record_id,
           qs.customer_id,
@@ -89,7 +119,28 @@ export default withShopifyProxy(
           body.ss_customer_airtable_id
         )
       );
+      const bottleFilter = toText(firstNonEmpty(qs.bottle, body.bottle)).toLowerCase();
+      const statusFilter = toText(firstNonEmpty(qs.status, body.status)).toLowerCase();
+
+      console.info("[studio-list] request", {
+        method,
+        is_v2: Boolean(isV2),
+        query_keys: Object.keys(qs || {}).sort(),
+        body_keys: Object.keys(body || {}).sort(),
+        raw_customer_record_id: rawCustomerRecordId || null,
+        normalized_customer_record_id: customerRecordId,
+        raw_customer_id: firstNonEmpty(qs.customer_id, body.customer_id) || null,
+        raw_ss_customer_airtable_id: body.ss_customer_airtable_id || null,
+        bottle_filter: bottleFilter || null,
+        status_filter: statusFilter || null,
+      });
+
       if (!customerRecordId) {
+        console.warn("[studio-list] missing_customer_record_id", {
+          raw_customer_record_id: rawCustomerRecordId || null,
+          raw_customer_id: firstNonEmpty(qs.customer_id, body.customer_id) || null,
+          raw_ss_customer_airtable_id: body.ss_customer_airtable_id || null,
+        });
         return sendJson(400, {
           ok: false,
           error: "missing_customer_record_id",
@@ -97,37 +148,54 @@ export default withShopifyProxy(
         });
       }
 
-      const bottleFilter = toText(firstNonEmpty(qs.bottle, body.bottle)).toLowerCase();
-      const statusFilter = toText(firstNonEmpty(qs.status, body.status)).toLowerCase();
-
-      const savedConfigFormula = buildFormula({
-        customerRecordId,
-        bottleFilter,
-        statusFilter,
-      });
-      const savedConfigRecords = await listAllRecords(STUDIO_TABLES.savedConfigurations, {
-        filterByFormula: savedConfigFormula,
-      });
-
-      const labelsFormula = buildLinkedCustomerFormula(
-        STUDIO_FIELDS.labels.customers,
+      const customerRecord = await getRecordOrNull(
+        STUDIO_TABLES.customers,
         customerRecordId
       );
-      const labelRecords = await listAllRecords(STUDIO_TABLES.labels, {
-        filterByFormula: labelsFormula,
+
+      console.info("[studio-list] customer-status", {
+        customer_record_id: customerRecordId,
+        customer: summarizeCustomerRecord(customerRecord),
+      });
+
+      if (!customerRecord?.id) {
+        console.warn("[studio-list] customer-record-missing", {
+          customer_record_id: customerRecordId,
+        });
+      }
+
+      const rawSavedConfigRecords = await listRecordsByLinkedRecordIds(
+        STUDIO_TABLES.savedConfigurations,
+        {
+          fieldName: STUDIO_FIELDS.savedConfigurations.customer,
+          linkedRecordIds: customerRecordId,
+        }
+      );
+      const savedConfigRecords = rawSavedConfigRecords.filter((record) => {
+        const fields = record?.fields || {};
+        return (
+          matchesTextFilter(
+            fields[STUDIO_FIELDS.savedConfigurations.bottleSelection],
+            bottleFilter
+          ) &&
+          matchesTextFilter(fields[STUDIO_FIELDS.savedConfigurations.status], statusFilter)
+        );
+      });
+
+      const labelRecords = await listRecordsByLinkedRecordIds(STUDIO_TABLES.labels, {
+        fieldName: STUDIO_FIELDS.labels.customers,
+        linkedRecordIds: customerRecordId,
       });
 
       const labelRecordIds = labelRecords.map((record) => record.id);
-      const versionRecords = [];
-      for (let idx = 0; idx < labelRecordIds.length; idx += 15) {
-        const chunk = labelRecordIds.slice(idx, idx + 15);
-        const formula = buildVersionsFormula(chunk);
-        if (!formula) continue;
-        const chunkRows = await listAllRecords(STUDIO_TABLES.labelVersions, {
-          filterByFormula: formula,
-        });
-        versionRecords.push(...chunkRows);
-      }
+      const versionRecords = await listRecordsByLinkedRecordIds(
+        STUDIO_TABLES.labelVersions,
+        {
+          fieldName: STUDIO_FIELDS.labelVersions.labels,
+          linkedRecordIds: labelRecordIds,
+          fallbackFieldNames: LABEL_VERSION_LABEL_FIELD_FALLBACKS,
+        }
+      );
 
       const versionsById = new Map(versionRecords.map((record) => [record.id, record]));
       const explicitVersionIds = Array.from(
@@ -157,6 +225,21 @@ export default withShopifyProxy(
           versionRecords.push(record);
         });
       }
+
+      console.info("[studio-list] linked-record-status", {
+        customer_record_id: customerRecordId,
+        saved_configurations_raw: summarizeIds(
+          rawSavedConfigRecords.map((record) => record.id)
+        ),
+        saved_configurations_filtered: summarizeIds(
+          savedConfigRecords.map((record) => record.id)
+        ),
+        labels: summarizeIds(labelRecords.map((record) => record.id)),
+        label_versions: summarizeIds(versionRecords.map((record) => record.id)),
+        explicit_version_ids: summarizeIds(explicitVersionIds),
+        label_summaries: labelRecords.map(summarizeLabelRecord),
+        version_summaries: versionRecords.map(summarizeVersionRecord),
+      });
 
       const versionsByLabelId = new Map();
       versionRecords.forEach((record) => {
@@ -332,6 +415,17 @@ export default withShopifyProxy(
         })
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
+      console.info("[studio-list] response-summary", {
+        customer_record_id: customerRecordId,
+        saved_configurations: summarizeIds(savedConfigurations.map((row) => row.id)),
+        labels: summarizeIds(labels.map((row) => row.id)),
+        counts: {
+          saved_configurations: savedConfigurations.length,
+          labels: labels.length,
+          label_versions: versionRecords.length,
+        },
+      });
+
       return sendJson(200, {
         ok: true,
         customer_record_id: customerRecordId,
@@ -348,6 +442,14 @@ export default withShopifyProxy(
         },
       });
     } catch (error) {
+      console.error("[studio-list] error", {
+        customer_record_id: customerRecordId,
+        status: error?.status || 500,
+        message: error?.message || String(error),
+        url: error?.url || null,
+        method: error?.method || null,
+        responseText: error?.responseText || null,
+      });
       return sendJson(error?.status || 500, mapErrorResponse(error));
     }
   },

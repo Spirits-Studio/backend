@@ -91,7 +91,16 @@ const installFetchSequence = (steps) => {
       assert.equal(table, step.table, `Fetch #${index + 1} table mismatch`);
     }
     if (Object.hasOwn(step, "recordId")) {
-      assert.equal(recordId, step.recordId, `Fetch #${index + 1} record id mismatch`);
+      if (recordId == null && method === "PATCH") {
+        const bodyRecordId = call.body?.records?.[0]?.id || null;
+        assert.equal(
+          bodyRecordId,
+          step.recordId,
+          `Fetch #${index + 1} record id mismatch`
+        );
+      } else {
+        assert.equal(recordId, step.recordId, `Fetch #${index + 1} record id mismatch`);
+      }
     }
     if (typeof step.assert === "function") {
       await step.assert(call);
@@ -410,6 +419,199 @@ test("create-airtable-customer backfills legacy gid customer records to numeric 
     const payload = await response.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.airtableId, "recLegacyCustomer9002");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("create-airtable-customer prioritizes Shopify id before Airtable id, email, then phone", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='9010')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/9010')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recStaleCustomer9010",
+      status: 403,
+      response: {
+        error: {
+          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
+          message:
+            "Invalid permissions, or the requested model was not found.",
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='priority@example.com')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recRecoveredByEmail9010",
+            fields: {
+              Email: "priority@example.com",
+              Source: "Guest",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recRecoveredByEmail9010",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "9010");
+        assert.equal(fields.Phone, "+447700900001");
+        assert.equal(fields["First Name"], "Priority");
+        assert.equal(fields["Last Name"], "Customer");
+        assert.equal(fields.Source, "Shopify");
+      },
+      response: {
+        records: [{ id: "recRecoveredByEmail9010", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const response = await createAirtableCustomer(
+      createProxyEvent({
+        method: "GET",
+        query: {
+          customer_id: "gid://shopify/Customer/9010",
+          airtable_id: "recStaleCustomer9010",
+          email: "priority@example.com",
+          first_name: "Priority",
+          last_name: "Customer",
+          phone: "+447700900001",
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.created, false);
+    assert.equal(payload.matchedBy, "email");
+    assert.equal(payload.airtableId, "recRecoveredByEmail9010");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("create-airtable-customer guest resolution uses Airtable id, email, then phone", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recGuestStaleCustomer",
+      status: 403,
+      response: {
+        error: {
+          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
+          message:
+            "Invalid permissions, or the requested model was not found.",
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='guest-priority@example.com')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Phone}='+447700900002')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recRecoveredGuestByPhone",
+            fields: {
+              Phone: "+447700900002",
+              Source: "Guest",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recRecoveredGuestByPhone",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Email, "guest-priority@example.com");
+        assert.equal(fields["First Name"], "Guest");
+        assert.equal(fields["Last Name"], "Priority");
+        assert.equal(fields.Source, "Shopify");
+      },
+      response: {
+        records: [{ id: "recRecoveredGuestByPhone", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const response = await createAirtableCustomer(
+      createProxyEvent({
+        method: "PATCH",
+        body: {
+          airtableId: "recGuestStaleCustomer",
+          email: "guest-priority@example.com",
+          first_name: "Guest",
+          last_name: "Priority",
+          phone: "+447700900002",
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.created, false);
+    assert.equal(payload.matchedBy, "phone");
+    assert.equal(payload.airtableId, "recRecoveredGuestByPhone");
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
@@ -800,13 +1002,6 @@ test("studio-save-configuration auto-creates customer for stale id when signed i
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      recordId: "recCustomerLegacyB",
-      status: 404,
-      response: { error: { message: "NOT_FOUND" } },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
       assert: (call) => {
         const formula = call.url.searchParams.get("filterByFormula") || "";
         assert.equal(formula, "({Shopify ID}='9001')");
@@ -825,6 +1020,13 @@ test("studio-save-configuration auto-creates customer for stale id when signed i
       response: {
         records: [],
       },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerLegacyB",
+      status: 404,
+      response: { error: { message: "NOT_FOUND" } },
     },
     {
       method: "GET",
@@ -903,17 +1105,38 @@ test("studio-list returns grouped configurations and label timeline with session
   const fetchMock = installFetchSequence([
     {
       method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerA",
+      response: {
+        id: "recCustomerA",
+        fields: {
+          "Shopify ID": "9001",
+          Source: "Shopify",
+          Email: "customer@example.com",
+        },
+      },
+    },
+    {
+      method: "GET",
       table: STUDIO_TABLES.savedConfigurations,
       assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.match(formula, /recCustomerA/);
+        assert.equal(call.url.searchParams.get("filterByFormula"), null);
       },
       response: {
         records: [
           {
+            id: "recSavedConfigurationOther",
+            createdTime: "2026-02-19T10:00:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.savedConfigurations.customer]: ["recCustomerOther"],
+              [STUDIO_FIELDS.savedConfigurations.configurationId]: "CFG-OTHER",
+            },
+          },
+          {
             id: "recSavedConfigurationA",
             createdTime: "2026-02-20T10:00:00.000Z",
             fields: {
+              [STUDIO_FIELDS.savedConfigurations.customer]: ["recCustomerA"],
               [STUDIO_FIELDS.savedConfigurations.configurationId]: "CFG-001",
               [STUDIO_FIELDS.savedConfigurations.displayName]: "Holiday Batch",
               [STUDIO_FIELDS.savedConfigurations.status]: "Saved",
@@ -934,15 +1157,23 @@ test("studio-list returns grouped configurations and label timeline with session
       method: "GET",
       table: STUDIO_TABLES.labels,
       assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.match(formula, /recCustomerA/);
+        assert.equal(call.url.searchParams.get("filterByFormula"), null);
       },
       response: {
         records: [
           {
+            id: "recLabelOther",
+            createdTime: "2026-02-19T09:00:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.labels.customers]: ["recCustomerOther"],
+              [STUDIO_FIELDS.labels.displayName]: "Other Label Thread",
+            },
+          },
+          {
             id: "recLabelFrontA",
             createdTime: "2026-02-20T09:00:00.000Z",
             fields: {
+              [STUDIO_FIELDS.labels.customers]: ["recCustomerA"],
               [STUDIO_FIELDS.labels.displayName]: "Front Label Thread",
               [STUDIO_FIELDS.labels.sessionId]: "session-label-1",
               [STUDIO_FIELDS.labels.labelVersions]: ["recVersionFrontA"],
@@ -957,11 +1188,20 @@ test("studio-list returns grouped configurations and label timeline with session
       method: "GET",
       table: STUDIO_TABLES.labelVersions,
       assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.match(formula, /recLabelFrontA/);
+        assert.equal(call.url.searchParams.get("filterByFormula"), null);
       },
       response: {
         records: [
+          {
+            id: "recVersionOther",
+            createdTime: "2026-02-19T09:30:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.labelVersions.labels]: ["recLabelOther"],
+              [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+              [STUDIO_FIELDS.labelVersions.versionKind]: "Initial",
+              [STUDIO_FIELDS.labelVersions.versionNumber]: 1,
+            },
+          },
           {
             id: "recVersionFrontA",
             createdTime: "2026-02-20T09:30:00.000Z",
@@ -1008,10 +1248,22 @@ test("studio-list includes current label versions when direct label-version link
   const fetchMock = installFetchSequence([
     {
       method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerA",
+      response: {
+        id: "recCustomerA",
+        fields: {
+          "Shopify ID": "9001",
+          Source: "Shopify",
+          Email: "customer@example.com",
+        },
+      },
+    },
+    {
+      method: "GET",
       table: STUDIO_TABLES.savedConfigurations,
       assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.match(formula, /recCustomerA/);
+        assert.equal(call.url.searchParams.get("filterByFormula"), null);
       },
       response: { records: [] },
     },
@@ -1019,8 +1271,7 @@ test("studio-list includes current label versions when direct label-version link
       method: "GET",
       table: STUDIO_TABLES.labels,
       assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.match(formula, /recCustomerA/);
+        assert.equal(call.url.searchParams.get("filterByFormula"), null);
       },
       response: {
         records: [
@@ -1028,6 +1279,7 @@ test("studio-list includes current label versions when direct label-version link
             id: "recLabelFrontA",
             createdTime: "2026-02-20T09:00:00.000Z",
             fields: {
+              [STUDIO_FIELDS.labels.customers]: ["recCustomerA"],
               [STUDIO_FIELDS.labels.displayName]: "Front Label Thread",
               [STUDIO_FIELDS.labels.sessionId]: "session-label-1",
               [STUDIO_FIELDS.labels.labelVersions]: [],
@@ -1042,11 +1294,18 @@ test("studio-list includes current label versions when direct label-version link
       method: "GET",
       table: STUDIO_TABLES.labelVersions,
       assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.match(formula, /recLabelFrontA/);
+        assert.equal(call.url.searchParams.get("filterByFormula"), null);
       },
       response: {
-        records: [],
+        records: [
+          {
+            id: "recVersionOther",
+            createdTime: "2026-02-20T09:10:00.000Z",
+            fields: {
+              [STUDIO_FIELDS.labelVersions.labels]: ["recLabelOther"],
+            },
+          },
+        ],
       },
     },
     {

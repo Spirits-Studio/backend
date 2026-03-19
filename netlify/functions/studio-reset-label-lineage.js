@@ -1,5 +1,4 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
-import { escapeFormulaValue } from "../../src/lib/airtable.js";
 import {
   STUDIO_TABLES,
   STUDIO_FIELDS,
@@ -16,13 +15,17 @@ import {
   createResilient,
   getRecordOrNull,
   deleteRecordOrNull,
-  listAllRecords,
+  listRecordsByLinkedRecordIds,
   resolveCustomerRecordIdOrCreate,
   mapErrorResponse,
 } from "./_lib/studio.js";
 
 const RESET_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
 const resetLabelLineageCache = new Map();
+const LABEL_VERSION_LABEL_FIELD_FALLBACKS = [
+  "Labels: Current Front Label Versions",
+  "Labels: Current Back Label Versions",
+];
 
 const sideToTitle = (side) => (side === "back" ? "Back" : "Front");
 
@@ -64,12 +67,6 @@ const dedupeRecordIds = (values = []) => {
   return out;
 };
 
-const buildLabelVersionFilterFormula = ({ labelRecordId, side }) => {
-  const safeLabelRecordId = escapeFormulaValue(labelRecordId);
-  const safeSide = escapeFormulaValue(sideToTitle(side));
-  return `AND(FIND('${safeLabelRecordId}', ARRAYJOIN({${STUDIO_FIELDS.labelVersions.labels}})), {${STUDIO_FIELDS.labelVersions.designSide}}='${safeSide}')`;
-};
-
 export const __clearResetLabelLineageCacheForTests = () => {
   resetLabelLineageCache.clear();
 };
@@ -80,7 +77,7 @@ export const createStudioResetLabelLineageHandler = ({
   sendJsonImpl = sendJson,
   getRecordOrNullImpl = getRecordOrNull,
   deleteRecordOrNullImpl = deleteRecordOrNull,
-  listAllRecordsImpl = listAllRecords,
+  listRecordsByLinkedRecordIdsImpl = listRecordsByLinkedRecordIds,
   createResilientImpl = createResilient,
   resolveCustomerRecordIdOrCreateImpl = resolveCustomerRecordIdOrCreate,
   mapErrorResponseImpl = mapErrorResponse,
@@ -276,13 +273,14 @@ export const createStudioResetLabelLineageHandler = ({
 
       const versionIdsToDelete = [];
       if (oldLabelRecord?.id) {
-        const labelFormula = buildLabelVersionFilterFormula({
-          labelRecordId: oldLabelRecord.id,
-          side,
-        });
-        const linkedVersions = await listAllRecordsImpl(STUDIO_TABLES.labelVersions, {
-          filterByFormula: labelFormula,
-        });
+        const linkedVersions = await listRecordsByLinkedRecordIdsImpl(
+          STUDIO_TABLES.labelVersions,
+          {
+            fieldName: STUDIO_FIELDS.labelVersions.labels,
+            linkedRecordIds: oldLabelRecord.id,
+            fallbackFieldNames: LABEL_VERSION_LABEL_FIELD_FALLBACKS,
+          }
+        );
 
         linkedVersions.forEach((versionRecord) => {
           const versionRecordId = normalizeRecordId(versionRecord?.id);

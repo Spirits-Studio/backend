@@ -887,14 +887,23 @@ test("orders webhook creates and links billing address records", async () => {
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      recordId: "recCanonicalBillingCustomer",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='9010')"
+        );
+      },
       response: {
-        id: "recCanonicalBillingCustomer",
-        fields: {
-          "Shopify ID": "9010",
-          Email: "billing@example.com",
-          Source: "Guest",
-        },
+        records: [
+          {
+            id: "recCanonicalBillingCustomer",
+            fields: {
+              "Shopify ID": "9010",
+              Email: "billing@example.com",
+              Source: "Guest",
+            },
+          },
+        ],
       },
     },
     {
@@ -969,12 +978,18 @@ test("orders webhook creates and links billing address records", async () => {
       method: "GET",
       table: STUDIO_TABLES.addresses,
       assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recOrderBillingAddress', ARRAYJOIN({Orders & Fulfilment}))"
-        );
+        assert.equal(call.url.searchParams.get("filterByFormula"), null);
       },
-      response: { records: [] },
+      response: {
+        records: [
+          {
+            id: "recAddressOtherOrder",
+            fields: {
+              [STUDIO_FIELDS.addresses.orders]: ["recDifferentOrder"],
+            },
+          },
+        ],
+      },
     },
     {
       method: "POST",
@@ -1217,6 +1232,28 @@ test("guest order with _saved_configuration_id claims the linked customer and en
       },
       response: {
         records: [{ id: "recGuestCustomer", fields: { Email: "guest@example.com" } }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='9001')");
+      },
+      response: {
+        records: [],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Shopify ID}='gid://shopify/Customer/9001')");
+      },
+      response: {
+        records: [],
       },
     },
     {
@@ -1654,6 +1691,28 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='10425417531738')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/10425417531738')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
       recordId: "recGuestCustomerPromote",
       response: {
         id: "recGuestCustomerPromote",
@@ -1794,19 +1853,28 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
   }
 });
 
-test("upsertCanonicalCustomer prefers the linked Airtable customer when Shopify id already matches", async () => {
+test("upsertCanonicalCustomer prioritizes Shopify id over the preferred Airtable record", async () => {
   const fetchMock = installFetchSequence([
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      recordId: "recPreferredCustomerSameId",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='10425417531738')"
+        );
+      },
       response: {
-        id: "recPreferredCustomerSameId",
-        fields: {
-          "Shopify ID": "10425417531738",
-          Email: "stale-guest@example.com",
-          Source: "Guest",
-        },
+        records: [
+          {
+            id: "recPreferredCustomerSameId",
+            fields: {
+              "Shopify ID": "10425417531738",
+              Email: "stale-guest@example.com",
+              Source: "Guest",
+            },
+          },
+        ],
       },
     },
     {
@@ -1837,7 +1905,90 @@ test("upsertCanonicalCustomer prefers the linked Airtable customer when Shopify 
 
     assert.equal(result.customerRecordId, "recPreferredCustomerSameId");
     assert.equal(result.created, false);
-    assert.equal(result.matchedBy, "preferred_record");
+    assert.equal(result.matchedBy, "shopify_id");
+    assert.equal(result.updated, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("upsertCanonicalCustomer guest fallback ignores stale preferred records and continues to email then phone", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recStalePreferredGuest",
+      status: 403,
+      response: {
+        error: {
+          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
+          message:
+            "Invalid permissions, or the requested model was not found.",
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='guest-fallback@example.com')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Phone}='+447700900555')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recCanonicalGuestByPhone",
+            fields: {
+              Phone: "+447700900555",
+              Source: "Guest",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCanonicalGuestByPhone",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Email, "guest-fallback@example.com");
+        assert.equal(fields["First Name"], "Guest");
+        assert.equal(fields["Last Name"], "Fallback");
+        assert.equal(fields.Source, "Shopify");
+      },
+      response: {
+        records: [{ id: "recCanonicalGuestByPhone", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const result = await upsertCanonicalCustomer({
+      email: "guest-fallback@example.com",
+      firstName: "Guest",
+      lastName: "Fallback",
+      phone: "+447700900555",
+      preferredCustomerRecordIds: ["recStalePreferredGuest"],
+    });
+
+    assert.equal(result.customerRecordId, "recCanonicalGuestByPhone");
+    assert.equal(result.created, false);
+    assert.equal(result.matchedBy, "phone");
     assert.equal(result.updated, true);
     fetchMock.assertDone();
   } finally {
@@ -2031,6 +2182,130 @@ test("customer email changes are synced on customers/update", async () => {
     assert.equal(res.body?.ok, true);
     assert.equal(res.body?.canonical_customer_record_id, "recCanonicalExisting");
     assert.equal(res.body?.created_customer, false);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("customers/update falls back to phone before creating a new customer", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_customer_update_phone_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookCustomerUpdatePhone1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='7003')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/7003')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='phone-match@example.com')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Phone}='+447700900123')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recCanonicalByPhone",
+            fields: {
+              Phone: "+447700900123",
+              Source: "Guest",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCanonicalByPhone",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "7003");
+        assert.equal(fields.Email, "phone-match@example.com");
+        assert.equal(fields["First Name"], "Phone");
+        assert.equal(fields["Last Name"], "Match");
+        assert.equal(fields.Source, "Shopify");
+      },
+      response: { records: [{ id: "recCanonicalByPhone", fields: {} }] },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookCustomerUpdatePhone1",
+      response: { records: [{ id: "recWebhookCustomerUpdatePhone1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "customers/update",
+      webhookId: "wh_customer_update_phone_1",
+      payload: {
+        id: 7003,
+        email: "phone-match@example.com",
+        phone: null,
+        first_name: "Phone",
+        last_name: "Match",
+        default_address: {
+          phone: "+447700900123",
+        },
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookCustomersUpdate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.canonical_customer_record_id, "recCanonicalByPhone");
+    assert.equal(res.body?.created_customer, false);
+    assert.equal(res.body?.matched_by, "phone");
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

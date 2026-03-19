@@ -330,6 +330,54 @@ export const getLinkedIds = (record, fieldName, fallbackFieldNames = []) => {
   return out;
 };
 
+export const listRecordsByLinkedRecordIds = async (
+  table,
+  {
+    fieldName,
+    linkedRecordIds = [],
+    fallbackFieldNames = [],
+    maxMatches,
+    sort,
+  } = {}
+) => {
+  const targetIds = new Set(
+    (Array.isArray(linkedRecordIds) ? linkedRecordIds : [linkedRecordIds])
+      .map((value) => normalizeRecordId(value))
+      .filter(Boolean)
+  );
+  if (!fieldName || !targetIds.size) return [];
+
+  const records = [];
+  let offset = null;
+
+  do {
+    const page = await listRecords(table, {
+      sort,
+      pageSize: 100,
+      offset,
+    });
+    const pageRecords = Array.isArray(page?.records) ? page.records : [];
+
+    for (const record of pageRecords) {
+      const linkedIds = getLinkedIds(record, fieldName, fallbackFieldNames);
+      if (!linkedIds.some((recordId) => targetIds.has(recordId))) continue;
+
+      records.push(record);
+      if (
+        Number.isFinite(maxMatches) &&
+        maxMatches > 0 &&
+        records.length >= maxMatches
+      ) {
+        return records;
+      }
+    }
+
+    offset = page?.offset || null;
+  } while (offset);
+
+  return records;
+};
+
 export const buildFieldPatch = (
   record,
   fieldName,
@@ -514,7 +562,7 @@ const sanitizeCustomerIdentityValue = (value, maxLen = 255) => {
   return text.slice(0, maxLen);
 };
 
-const parseAirtableErrorType = (error) => {
+export const parseAirtableErrorType = (error) => {
   const responseText = String(error?.responseText || "");
   if (!responseText) return null;
   try {
@@ -525,7 +573,7 @@ const parseAirtableErrorType = (error) => {
   }
 };
 
-const isAirtableLookupRecoverableError = (error) => {
+export const isAirtableLookupRecoverableError = (error) => {
   const status = Number(error?.status || 0);
   if (status === 404) return true;
   if (status !== 403) return false;
@@ -651,7 +699,9 @@ export const resolveCustomerRecordIdOrCreate = async ({
   const shouldCreate = Boolean(allowCreate || implicitCreateFlag);
   const providedRecordId = normalizeRecordId(providedCustomerRecordId);
   const identity = resolveCustomerIdentity({ body, qs });
-  const hasIdentitySignals = Boolean(identity.shopifyId || identity.email);
+  const hasIdentitySignals = Boolean(
+    identity.shopifyId || identity.email || identity.phone
+  );
   let lookupUncertain = false;
   const logResolution = ({
     customerCreationReason,
@@ -663,13 +713,15 @@ export const resolveCustomerRecordIdOrCreate = async ({
       endpoint,
       shopify_id_present: Boolean(identity.shopifyId),
       email_present: Boolean(identity.email),
+      phone_present: Boolean(identity.phone),
       provided_record_id: providedRecordId || null,
       recovered: Boolean(recovered),
       created: Boolean(created),
     });
   };
 
-  if (providedRecordId) {
+  const tryResolveProvidedRecord = async () => {
+    if (!providedRecordId) return null;
     let existing = null;
     try {
       existing = await getRecordOrNull(STUDIO_TABLES.customers, providedRecordId);
@@ -685,62 +737,88 @@ export const resolveCustomerRecordIdOrCreate = async ({
       });
       existing = null;
     }
-    if (existing?.id) {
-      logResolution({
-        customerCreationReason: "lookup_by_provided_record_id",
-        recovered: false,
-        created: false,
-      });
-      return {
-        customerRecordId: existing.id,
-        created: false,
-        recovered: false,
-      };
-    }
-  }
+    return existing?.id ? existing : null;
+  };
+
+  const resolveMatchedCustomer = (matched, customerCreationReason) => {
+    if (!matched?.id) return null;
+    const recovered = Boolean(providedRecordId && matched.id !== providedRecordId);
+    logResolution({
+      customerCreationReason,
+      recovered,
+      created: false,
+    });
+    return {
+      customerRecordId: matched.id,
+      created: false,
+      recovered,
+    };
+  };
 
   const shopifySearchCandidates = buildShopifyCustomerIdLookupValues(
     identity.shopifyId
   );
 
-  for (const shopifyId of shopifySearchCandidates) {
-    const matchedResult = await findCustomerByField("Shopify ID", shopifyId);
-    if (matchedResult.uncertain) lookupUncertain = true;
-    const matched = matchedResult.record;
-    if (matched?.id) {
-      const recovered = Boolean(providedRecordId && matched.id !== providedRecordId);
-      logResolution({
-        customerCreationReason: "recovered_by_shopify_id",
-        recovered,
-        created: false,
-      });
-      return {
-        customerRecordId: matched.id,
-        created: false,
-        recovered,
-      };
+  const tryResolveShopifyId = async () => {
+    for (const shopifyId of shopifySearchCandidates) {
+      const matchedResult = await findCustomerByField("Shopify ID", shopifyId);
+      if (matchedResult.uncertain) lookupUncertain = true;
+      const matched = resolveMatchedCustomer(
+        matchedResult.record,
+        "recovered_by_shopify_id"
+      );
+      if (matched) return matched;
     }
-  }
+    return null;
+  };
 
-  if (identity.email) {
+  const tryResolveEmail = async () => {
+    if (!identity.email) return null;
     const matchedByEmailResult = await findCustomerByField("Email", identity.email);
     if (matchedByEmailResult.uncertain) lookupUncertain = true;
-    const matchedByEmail = matchedByEmailResult.record;
-    if (matchedByEmail?.id) {
-      const recovered = Boolean(
-        providedRecordId && matchedByEmail.id !== providedRecordId
-      );
-      logResolution({
-        customerCreationReason: "recovered_by_email",
-        recovered,
-        created: false,
-      });
-      return {
-        customerRecordId: matchedByEmail.id,
-        created: false,
-        recovered,
-      };
-    }
+    return resolveMatchedCustomer(
+      matchedByEmailResult.record,
+      "recovered_by_email"
+    );
+  };
+
+  const tryResolvePhone = async () => {
+    if (!identity.phone) return null;
+    const matchedByPhoneResult = await findCustomerByField("Phone", identity.phone);
+    if (matchedByPhoneResult.uncertain) lookupUncertain = true;
+    return resolveMatchedCustomer(
+      matchedByPhoneResult.record,
+      "recovered_by_phone"
+    );
+  };
+
+  if (identity.shopifyId) {
+    const matchedByShopify = await tryResolveShopifyId();
+    if (matchedByShopify) return matchedByShopify;
+  }
+
+  const providedRecord = await tryResolveProvidedRecord();
+  if (providedRecord?.id) {
+    logResolution({
+      customerCreationReason: "lookup_by_provided_record_id",
+      recovered: false,
+      created: false,
+    });
+    return {
+      customerRecordId: providedRecord.id,
+      created: false,
+      recovered: false,
+    };
+  }
+
+  const matchedByEmail = await tryResolveEmail();
+  if (matchedByEmail) {
+    return matchedByEmail;
+  }
+
+  const matchedByPhone = await tryResolvePhone();
+  if (matchedByPhone) {
+    return matchedByPhone;
   }
 
   const shouldCreateAfterConfirmedMiss =

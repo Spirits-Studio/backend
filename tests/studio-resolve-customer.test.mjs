@@ -108,16 +108,6 @@ test("resolveCustomerRecordIdOrCreate falls back to legacy gid matches for Shopi
     {
       method: "GET",
       assert: ({ url }) => {
-        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
-      },
-      status: 404,
-      response: {
-        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
-      },
-    },
-    {
-      method: "GET",
-      assert: ({ url }) => {
         assert.equal(url.pathname, "/v0/appTestBase/Customers");
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
@@ -171,20 +161,6 @@ test("resolveCustomerRecordIdOrCreate can create when customer searches are deni
     {
       method: "GET",
       assert: ({ url }) => {
-        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
-      },
-      status: 403,
-      response: {
-        error: {
-          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
-          message:
-            "Invalid permissions, or the requested model was not found.",
-        },
-      },
-    },
-    {
-      method: "GET",
-      assert: ({ url }) => {
         assert.equal(url.pathname, "/v0/appTestBase/Customers");
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
@@ -210,6 +186,20 @@ test("resolveCustomerRecordIdOrCreate can create when customer searches are deni
           url.searchParams.get("filterByFormula"),
           "({Shopify ID}='gid://shopify/Customer/123')"
         );
+      },
+      status: 403,
+      response: {
+        error: {
+          type: "INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND",
+          message:
+            "Invalid permissions, or the requested model was not found.",
+        },
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
       },
       status: 403,
       response: {
@@ -280,16 +270,6 @@ test("resolveCustomerRecordIdOrCreate auto-creates after confirmed misses when i
     {
       method: "GET",
       assert: ({ url }) => {
-        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
-      },
-      status: 404,
-      response: {
-        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
-      },
-    },
-    {
-      method: "GET",
-      assert: ({ url }) => {
         assert.equal(url.pathname, "/v0/appTestBase/Customers");
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
@@ -313,6 +293,16 @@ test("resolveCustomerRecordIdOrCreate auto-creates after confirmed misses when i
       },
       response: {
         records: [],
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
+      },
+      status: 404,
+      response: {
+        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
       },
     },
     {
@@ -352,16 +342,6 @@ test("resolveCustomerRecordIdOrCreate does not auto-create when lookup certainty
     {
       method: "GET",
       assert: ({ url }) => {
-        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
-      },
-      status: 404,
-      response: {
-        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
-      },
-    },
-    {
-      method: "GET",
-      assert: ({ url }) => {
         assert.equal(url.pathname, "/v0/appTestBase/Customers");
         assert.equal(url.searchParams.get("maxRecords"), "1");
         assert.equal(
@@ -395,6 +375,16 @@ test("resolveCustomerRecordIdOrCreate does not auto-create when lookup certainty
           message:
             "Invalid permissions, or the requested model was not found.",
         },
+      },
+    },
+    {
+      method: "GET",
+      assert: ({ url }) => {
+        assert.equal(url.pathname, "/v0/appTestBase/Customers/recStaleCustomer");
+      },
+      status: 404,
+      response: {
+        error: { type: "NOT_FOUND", message: "NOT_FOUND" },
       },
     },
   ]);

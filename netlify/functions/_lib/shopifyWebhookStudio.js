@@ -12,6 +12,8 @@ import {
   normalizeSavedConfigurationStatusFromOrderStatus,
   normalizeSide,
   normalizeSingleSelectOption,
+  isAirtableLookupRecoverableError,
+  parseAirtableErrorType,
   getLinkedIds,
   getFieldValue,
   buildLinkedPatch,
@@ -19,6 +21,7 @@ import {
   updateResilient,
   getRecordOrNull,
   listAllRecords,
+  listRecordsByLinkedRecordIds,
   sanitizeText,
   sanitizeUrl,
   toLinkedRecordArray,
@@ -518,6 +521,11 @@ export const normalizeCustomerWebhookPayload = (payload, envelope = {}) => {
   const customerShopifyId = normalizeShopifyCustomerId(
     payload?.admin_graphql_api_id ?? payload?.id
   );
+  const normalizedPhone = normalizePhone(
+    payload?.phone ??
+      payload?.default_address?.phone ??
+      payload?.addresses?.find?.((address) => address?.phone)?.phone
+  );
 
   return {
     webhook_id: envelope?.webhook_id || null,
@@ -529,7 +537,7 @@ export const normalizeCustomerWebhookPayload = (payload, envelope = {}) => {
       email: normalizeEmail(payload?.email),
       first_name: normalizeName(payload?.first_name),
       last_name: normalizeName(payload?.last_name),
-      phone: normalizePhone(payload?.phone),
+      phone: normalizedPhone,
       created_at: payload?.created_at || null,
       updated_at: payload?.updated_at || null,
       verified_email:
@@ -614,7 +622,7 @@ export const upsertCanonicalCustomer = async ({
   const normalizedShopDomain = normalizeText(shopDomain, 255);
   const normalizedCreationSource = normalizeCustomerCreationSource(creationSource);
 
-  if (!normalizedShopifyId && !normalizedEmail) {
+  if (!normalizedShopifyId && !normalizedEmail && !normalizedPhone) {
     return {
       customerRecordId: null,
       created: false,
@@ -627,8 +635,20 @@ export const upsertCanonicalCustomer = async ({
   let matchedBy = null;
 
   const preferredIds = uniqueRecordIds(preferredCustomerRecordIds);
-  if (preferredIds.length === 1) {
-    const preferred = await getRecordOrNull(STUDIO_TABLES.customers, preferredIds[0]);
+  const tryPreferredRecord = async () => {
+    if (preferredIds.length !== 1) return null;
+    let preferred = null;
+    try {
+      preferred = await getRecordOrNull(STUDIO_TABLES.customers, preferredIds[0]);
+    } catch (error) {
+      if (!isAirtableLookupRecoverableError(error)) throw error;
+      console.warn("[webhook] preferred customer lookup skipped", {
+        preferredCustomerRecordId: preferredIds[0],
+        status: error?.status,
+        errorType: parseAirtableErrorType(error),
+      });
+      return null;
+    }
     const currentShopifyId = normalizeShopifyCustomerId(
       preferred?.fields?.["Shopify ID"]
     );
@@ -644,12 +664,12 @@ export const upsertCanonicalCustomer = async ({
       preferred?.id &&
       (hasClaimablePreferredShopifyId || hasClaimablePreferredEmail)
     ) {
-      existing = preferred;
-      matchedBy = "preferred_record";
+      return preferred;
     }
-  }
+    return null;
+  };
 
-  if (!existing?.id && normalizedShopifyId) {
+  if (normalizedShopifyId) {
     for (const lookupValue of buildShopifyCustomerIdLookupValues(
       normalizedShopifyId
     )) {
@@ -661,9 +681,22 @@ export const upsertCanonicalCustomer = async ({
     }
   }
 
+  if (!existing?.id) {
+    const preferred = await tryPreferredRecord();
+    if (preferred?.id) {
+      existing = preferred;
+      matchedBy = "preferred_record";
+    }
+  }
+
   if (!existing?.id && normalizedEmail) {
     existing = await findOneBy(STUDIO_TABLES.customers, "Email", normalizedEmail);
     if (existing?.id) matchedBy = "email";
+  }
+
+  if (!existing?.id && normalizedPhone) {
+    existing = await findOneBy(STUDIO_TABLES.customers, "Phone", normalizedPhone);
+    if (existing?.id) matchedBy = "phone";
   }
 
   const canonicalFields = {
@@ -731,7 +764,11 @@ export const upsertCanonicalCustomer = async ({
   return {
     customerRecordId: created?.id || null,
     created: true,
-    matchedBy: normalizedShopifyId ? "shopify_id" : "email",
+    matchedBy: normalizedShopifyId
+      ? "shopify_id"
+      : normalizedEmail
+        ? "email"
+        : "phone",
     updated: false,
     record: created,
   };
@@ -742,9 +779,10 @@ const listAddressesByLinkedOrder = async (orderRecordId) => {
   if (!orderId) return [];
 
   try {
-    const rows = await listAllRecords(STUDIO_TABLES.addresses, {
-      filterByFormula: `FIND('${escapeFormulaValue(orderId)}', ARRAYJOIN({${STUDIO_FIELDS.addresses.orders}}))`,
-      maxRecords: 5,
+    const rows = await listRecordsByLinkedRecordIds(STUDIO_TABLES.addresses, {
+      fieldName: STUDIO_FIELDS.addresses.orders,
+      linkedRecordIds: orderId,
+      maxMatches: 5,
     });
     return Array.isArray(rows) ? rows : [];
   } catch {
