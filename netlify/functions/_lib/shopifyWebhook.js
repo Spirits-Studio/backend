@@ -336,9 +336,19 @@ export const completeWebhookIdempotency = async ({
   }
 };
 
-export const sendWebhookJson = (res, status, payload) => {
+export const sendWebhookJson = (res, status, payload, req = null) => {
   if (res && typeof res.status === "function" && typeof res.json === "function") {
     return res.status(status).json(payload);
+  }
+
+  if (isWebRequestLike(req)) {
+    return new Response(JSON.stringify(payload), {
+      status,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
   return {
@@ -351,10 +361,20 @@ export const sendWebhookJson = (res, status, payload) => {
   };
 };
 
-export const sendWebhookText = (res, status, text) => {
+export const sendWebhookText = (res, status, text, req = null) => {
   const body = String(text || "");
   if (res && typeof res.status === "function" && typeof res.end === "function") {
     return res.status(status).end(body);
+  }
+
+  if (isWebRequestLike(req)) {
+    return new Response(body, {
+      status,
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store",
+      },
+    });
   }
 
   return {

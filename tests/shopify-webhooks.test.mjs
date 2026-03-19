@@ -15,6 +15,9 @@ process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID = "Webhook Events";
 const { default: shopifyWebhookOrdersCreate } = await import(
   "../netlify/functions/shopify-webhook-orders-create.js"
 );
+const { default: shopifyWebhookOrdersPaid } = await import(
+  "../netlify/functions/shopify-webhook-orders-paid.js"
+);
 const { default: shopifyWebhookCustomersCreate } = await import(
   "../netlify/functions/shopify-webhook-customers-create.js"
 );
@@ -146,6 +149,31 @@ const createWebhookEvent = ({
     body: rawBody,
     isBase64Encoded: false,
   };
+};
+
+const createWebhookRequestV2 = ({
+  payload,
+  topic,
+  webhookId,
+  shopDomain = "wnbrmm-sg.myshopify.com",
+}) => {
+  const rawBody = JSON.stringify(payload || {});
+  const hmac = crypto
+    .createHmac("sha256", process.env.SHOPIFY_WEBHOOK_SECRET)
+    .update(rawBody, "utf8")
+    .digest("base64");
+
+  return new Request("https://example.netlify.app/.netlify/functions/webhook", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-shopify-topic": topic,
+      "x-shopify-shop-domain": shopDomain,
+      "x-shopify-webhook-id": webhookId,
+      "x-shopify-hmac-sha256": hmac,
+    },
+    body: rawBody,
+  });
 };
 
 const createWebhookResponse = () => ({
@@ -359,6 +387,57 @@ test("customers/update webhook handles Netlify event body without stream reader"
     const body = parseNetlifyResponseBody(response);
 
     assert.equal(response?.statusCode, 200);
+    assert.equal(body?.ok, true);
+    assert.equal(body?.idempotent_skip, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("orders/paid webhook returns a Web Response for Request-based invocations", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Webhook ID}='wh_event_orders_paid_1')");
+      },
+      response: {
+        records: [{ id: "recWebhookEventOrdersPaid", fields: { Status: "processed" } }],
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookEventOrdersPaid",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "skipped");
+      },
+      response: {
+        records: [{ id: "recWebhookEventOrdersPaid", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const request = createWebhookRequestV2({
+      topic: "orders/paid",
+      webhookId: "wh_event_orders_paid_1",
+      payload: {
+        id: 10003,
+        line_items: [],
+      },
+    });
+
+    const response = await shopifyWebhookOrdersPaid(request);
+    assert.ok(response instanceof Response);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "application/json");
+
+    const body = await response.json();
     assert.equal(body?.ok, true);
     assert.equal(body?.idempotent_skip, true);
     fetchMock.assertDone();

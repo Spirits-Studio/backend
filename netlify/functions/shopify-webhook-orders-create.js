@@ -43,6 +43,8 @@ export const createShopifyWebhookOrdersHandler = ({
   orderStatus,
 }) =>
   async (req, res) => {
+    const sendJson = (status, payload) => sendWebhookJson(res, status, payload, req);
+    const sendText = (status, text) => sendWebhookText(res, status, text, req);
     const envelope = await parseWebhookEnvelope(req);
     const normalizedEvent = normalizeOrderWebhookPayload(envelope.payload || {}, envelope);
     const order = normalizedEvent?.order || {};
@@ -64,7 +66,7 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "error",
         error: mapWebhookErrorMessage(envelope.parseError),
       });
-      return sendWebhookJson(res, 400, {
+      return sendJson(400, {
         ok: false,
         error: "invalid_json",
       });
@@ -75,7 +77,7 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "error",
         error: "invalid_hmac",
       });
-      return sendWebhookText(res, 401, "invalid hmac");
+      return sendText(401, "invalid hmac");
     }
 
     const payloadHash = hashWebhookPayload(envelope.rawBody);
@@ -93,7 +95,7 @@ export const createShopifyWebhookOrdersHandler = ({
         idempotent_skip: false,
         error: "idempotency_unavailable",
       });
-      return sendWebhookJson(res, 503, {
+      return sendJson(503, {
         ok: false,
         error: "idempotency_unavailable",
         message:
@@ -111,7 +113,7 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "skipped",
         logger,
       });
-      return sendWebhookJson(res, 200, {
+      return sendJson(200, {
         ok: true,
         idempotent_skip: true,
         webhook_id: envelope.webhook_id,
@@ -128,7 +130,7 @@ export const createShopifyWebhookOrdersHandler = ({
         status: "skipped",
         logger,
       });
-      return sendWebhookJson(res, 202, {
+      return sendJson(202, {
         ok: true,
         skipped: true,
         reason: "topic_mismatch",
@@ -251,7 +253,7 @@ export const createShopifyWebhookOrdersHandler = ({
         logger,
       });
 
-      return sendWebhookJson(res, 200, responsePayload);
+      return sendJson(200, responsePayload);
     } catch (error) {
       const errorMessage = mapWebhookErrorMessage(error);
 
@@ -267,7 +269,7 @@ export const createShopifyWebhookOrdersHandler = ({
         logger,
       });
 
-      return sendWebhookJson(res, error?.status || 500, {
+      return sendJson(error?.status || 500, {
         ok: false,
         error: "server_error",
         message: error?.message || String(error),
