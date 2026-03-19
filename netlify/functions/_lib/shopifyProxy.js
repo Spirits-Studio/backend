@@ -105,6 +105,7 @@ export function withShopifyProxy(
 
 function corsHeaders(origin) {
   const ALLOWED_ORIGINS = new Set([
+    'https://build.spiritsstudio.co.uk',
     'https://spiritsstudio.co.uk',
     'https://www.spiritsstudio.co.uk',
     'https://wnbrmm-sg.myshopify.com',
