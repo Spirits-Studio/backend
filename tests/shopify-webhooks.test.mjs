@@ -32,7 +32,6 @@ const {
   "../netlify/functions/_lib/shopifyWebhook.js"
 );
 const {
-  mergeGuestCustomersIntoCanonical,
   createOrderRecordForSavedConfiguration,
   upsertCanonicalCustomer,
 } = await import(
@@ -1426,8 +1425,6 @@ test("guest order with _saved_configuration_id claims the linked customer and en
     assert.equal(res.statusCode, 200);
     assert.equal(res.body?.ok, true);
     assert.equal(res.body?.canonical_customer_record_id, "recGuestCustomer");
-    assert.equal(res.body?.merge_candidates_count, 1);
-    assert.deepEqual(res.body?.merged_customer_pairs, []);
     assert.deepEqual(res.body?.updated_saved_configurations, ["recSavedConfigA"]);
     fetchMock.assertDone();
   } finally {
@@ -1791,9 +1788,6 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
     assert.equal(res.statusCode, 200);
     assert.equal(res.body?.ok, true);
     assert.equal(res.body?.canonical_customer_record_id, "recGuestCustomerPromote");
-    assert.equal(res.body?.merge_candidates_count, 1);
-    assert.deepEqual(res.body?.merged_customer_pairs, []);
-    assert.equal(res.body?.merged_records_updated, 0);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
@@ -1916,17 +1910,6 @@ test("customer created after guest order resolves by email and backfills Shopify
       response: { records: [{ id: "recGuestFromOldOrder", fields: {} }] },
     },
     {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "AND(LOWER({Email})='guest-created@example.com', OR({Shopify ID}=BLANK(), {Shopify ID}=''))"
-        );
-      },
-      response: { records: [] },
-    },
-    {
       method: "PATCH",
       table: "Webhook Events",
       recordId: "recWebhookCustomerCreate1",
@@ -2022,17 +2005,6 @@ test("customer email changes are synced on customers/update", async () => {
       response: { records: [{ id: "recCanonicalExisting", fields: {} }] },
     },
     {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "AND(LOWER({Email})='new-email@example.com', OR({Shopify ID}=BLANK(), {Shopify ID}=''))"
-        );
-      },
-      response: { records: [] },
-    },
-    {
       method: "PATCH",
       table: "Webhook Events",
       recordId: "recWebhookCustomerUpdate1",
@@ -2059,267 +2031,6 @@ test("customer email changes are synced on customers/update", async () => {
     assert.equal(res.body?.ok, true);
     assert.equal(res.body?.canonical_customer_record_id, "recCanonicalExisting");
     assert.equal(res.body?.created_customer, false);
-    fetchMock.assertDone();
-  } finally {
-    fetchMock.restore();
-  }
-});
-
-test("canonical merge handles multiple guest records", async () => {
-  const fetchMock = installFetchSequence([
-    {
-      method: "GET",
-      table: STUDIO_TABLES.savedConfigurations,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuest1', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recSavedGuest1",
-            fields: { [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuest1"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.savedConfigurations,
-      recordId: "recSavedGuest1",
-      response: { records: [{ id: "recSavedGuest1", fields: {} }] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.labels,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuest1', ARRAYJOIN({Customers}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recLabelGuest1",
-            fields: { [STUDIO_FIELDS.labels.customers]: ["recGuest1"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.labels,
-      recordId: "recLabelGuest1",
-      response: { records: [{ id: "recLabelGuest1", fields: {} }] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.orders,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuest1', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recOrderGuest1",
-            fields: { [STUDIO_FIELDS.orders.customer]: ["recGuest1"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.orders,
-      recordId: "recOrderGuest1",
-      response: { records: [{ id: "recOrderGuest1", fields: {} }] },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.customers,
-      recordId: "recGuest1",
-      response: {
-        records: [
-          {
-            id: "recGuest1",
-            fields: {
-              "Merge Status": "Merged",
-              "Merged Into Customer": ["recCanonicalMain"],
-              "Merged At": "2026-03-12T00:00:00.000Z",
-            },
-          },
-        ],
-      },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.savedConfigurations,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuest2', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recSavedGuest2",
-            fields: { [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuest2"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.savedConfigurations,
-      recordId: "recSavedGuest2",
-      response: { records: [{ id: "recSavedGuest2", fields: {} }] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.labels,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuest2', ARRAYJOIN({Customers}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recLabelGuest2",
-            fields: { [STUDIO_FIELDS.labels.customers]: ["recGuest2"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.labels,
-      recordId: "recLabelGuest2",
-      response: { records: [{ id: "recLabelGuest2", fields: {} }] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.orders,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuest2', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recOrderGuest2",
-            fields: { [STUDIO_FIELDS.orders.customer]: ["recGuest2"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.orders,
-      recordId: "recOrderGuest2",
-      response: { records: [{ id: "recOrderGuest2", fields: {} }] },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.customers,
-      recordId: "recGuest2",
-      response: {
-        records: [
-          {
-            id: "recGuest2",
-            fields: {
-              "Merge Status": "Merged",
-              "Merged Into Customer": ["recCanonicalMain"],
-              "Merged At": "2026-03-12T00:00:00.000Z",
-            },
-          },
-        ],
-      },
-    },
-  ]);
-
-  try {
-    const result = await mergeGuestCustomersIntoCanonical({
-      canonicalCustomerRecordId: "recCanonicalMain",
-      guestCustomerRecordIds: ["recGuest1", "recGuest2"],
-    });
-
-    assert.deepEqual(result.mergedPairs, [
-      "recGuest1->recCanonicalMain",
-      "recGuest2->recCanonicalMain",
-    ]);
-    assert.equal(result.relinkedSavedConfigurations, 2);
-    assert.equal(result.relinkedLabels, 2);
-    assert.equal(result.relinkedOrders, 2);
-    fetchMock.assertDone();
-  } finally {
-    fetchMock.restore();
-  }
-});
-
-test("merge tolerates missing customer merge marker fields", async () => {
-  const fetchMock = installFetchSequence([
-    {
-      method: "GET",
-      table: STUDIO_TABLES.savedConfigurations,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestNoMarker', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.labels,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestNoMarker', ARRAYJOIN({Customers}))"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.orders,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestNoMarker', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.customers,
-      recordId: "recGuestNoMarker",
-      response: {
-        records: [{ id: "recGuestNoMarker", fields: {} }],
-      },
-    },
-  ]);
-
-  try {
-    const result = await mergeGuestCustomersIntoCanonical({
-      canonicalCustomerRecordId: "recCanonicalMain",
-      guestCustomerRecordIds: ["recGuestNoMarker"],
-    });
-    assert.deepEqual(result.mergedPairs, ["recGuestNoMarker->recCanonicalMain"]);
-    assert.equal(result.relinkedSavedConfigurations, 0);
-    assert.equal(result.relinkedLabels, 0);
-    assert.equal(result.relinkedOrders, 0);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

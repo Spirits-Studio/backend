@@ -16,15 +16,8 @@ import {
 import {
   normalizeCustomerWebhookPayload,
   upsertCanonicalCustomer,
-  collectCustomerGuestCandidatesByEmail,
-  mergeGuestCustomersIntoCanonical,
 } from "./shopifyWebhookStudio.js";
 import { normalizeRecordId } from "./studio.js";
-
-const sumMergeRelinks = (mergeResult = {}) =>
-  Number(mergeResult?.relinkedSavedConfigurations || 0) +
-  Number(mergeResult?.relinkedLabels || 0) +
-  Number(mergeResult?.relinkedOrders || 0);
 
 export const createShopifyWebhookCustomersHandler = ({
   endpoint,
@@ -156,28 +149,8 @@ export const createShopifyWebhookCustomersHandler = ({
         canonicalCustomer?.customerRecordId
       );
 
-      const guestCandidates = canonicalCustomerRecordId
-        ? await collectCustomerGuestCandidatesByEmail({ email: customer?.email })
-        : [];
-
-      const mergeResult = canonicalCustomerRecordId
-        ? await mergeGuestCustomersIntoCanonical({
-            canonicalCustomerRecordId,
-            guestCustomerRecordIds: guestCandidates,
-          })
-        : {
-            mergedPairs: [],
-            relinkedSavedConfigurations: 0,
-            relinkedLabels: 0,
-            relinkedOrders: 0,
-          };
-
       logger.info("customer webhook processed", {
         canonical_customer_record_id: canonicalCustomerRecordId,
-        merge_candidates_count: guestCandidates.length,
-        relinked_saved_configs: mergeResult.relinkedSavedConfigurations,
-        relinked_labels: mergeResult.relinkedLabels,
-        relinked_orders: mergeResult.relinkedOrders,
         status: "processed",
       });
 
@@ -194,12 +167,6 @@ export const createShopifyWebhookCustomersHandler = ({
         canonical_customer_record_id: canonicalCustomerRecordId,
         created_customer: Boolean(canonicalCustomer?.created),
         matched_by: canonicalCustomer?.matchedBy || null,
-        merge_candidates_count: guestCandidates.length,
-        merged_customer_pairs: mergeResult.mergedPairs,
-        merged_records_updated: sumMergeRelinks(mergeResult),
-        relinked_saved_configs: mergeResult.relinkedSavedConfigurations,
-        relinked_labels: mergeResult.relinkedLabels,
-        relinked_orders: mergeResult.relinkedOrders,
         idempotent_skip: false,
         status: "processed",
       });

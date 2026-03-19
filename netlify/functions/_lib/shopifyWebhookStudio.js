@@ -10,6 +10,7 @@ import {
   normalizeRecordId,
   normalizeOrderStatus,
   normalizeSavedConfigurationStatusFromOrderStatus,
+  normalizeSide,
   normalizeSingleSelectOption,
   getLinkedIds,
   getFieldValue,
@@ -18,7 +19,6 @@ import {
   updateResilient,
   getRecordOrNull,
   listAllRecords,
-  buildLinkedCustomerFormula,
   sanitizeText,
   sanitizeUrl,
   toLinkedRecordArray,
@@ -737,182 +737,6 @@ export const upsertCanonicalCustomer = async ({
   };
 };
 
-const uniqueLinkedIds = (raw) => {
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  for (const value of raw) {
-    const recId = normalizeRecordId(value);
-    if (recId && !out.includes(recId)) out.push(recId);
-  }
-  return out;
-};
-
-const replaceLinkedCustomerId = ({ linkedIds, fromCustomerId, toCustomerId }) => {
-  const out = [];
-  for (const entry of linkedIds || []) {
-    const next = entry === fromCustomerId ? toCustomerId : entry;
-    if (next && !out.includes(next)) out.push(next);
-  }
-  return out;
-};
-
-const relinkTableCustomerField = async ({
-  table,
-  fieldName,
-  fromCustomerId,
-  toCustomerId,
-}) => {
-  if (!fromCustomerId || !toCustomerId || fromCustomerId === toCustomerId) {
-    return 0;
-  }
-
-  let records = [];
-  try {
-    records = await listAllRecords(table, {
-      filterByFormula: buildLinkedCustomerFormula(fieldName, fromCustomerId),
-    });
-  } catch {
-    return 0;
-  }
-
-  let touched = 0;
-  for (const record of records || []) {
-    const linkedIds = uniqueLinkedIds(record?.fields?.[fieldName]);
-    if (!linkedIds.includes(fromCustomerId)) continue;
-
-    const nextIds = replaceLinkedCustomerId({
-      linkedIds,
-      fromCustomerId,
-      toCustomerId,
-    });
-
-    const unchanged =
-      nextIds.length === linkedIds.length &&
-      nextIds.every((entry, idx) => entry === linkedIds[idx]);
-    if (unchanged) continue;
-
-    await updateResilient(table, record.id, {}, { [fieldName]: nextIds });
-    touched += 1;
-  }
-
-  return touched;
-};
-
-const markGuestCustomerAsMerged = async ({
-  guestCustomerRecordId,
-  canonicalCustomerRecordId,
-}) => {
-  if (!guestCustomerRecordId || !canonicalCustomerRecordId) return;
-
-  const mergedAtIso = new Date().toISOString();
-  const mergedInto = toLinkedRecordArray(canonicalCustomerRecordId);
-  const updated = await updateResilient(STUDIO_TABLES.customers, guestCustomerRecordId, {}, {
-    "Merge Status": "Merged",
-    "Merged Into Customer": mergedInto,
-    "Merged At": mergedAtIso,
-  });
-
-  const persistedStatus = String(updated?.fields?.["Merge Status"] || "")
-    .trim()
-    .toLowerCase();
-  const persistedMergedInto = Array.isArray(updated?.fields?.["Merged Into Customer"])
-    ? updated.fields["Merged Into Customer"].map((entry) => normalizeRecordId(entry))
-    : [];
-  const persistedMergedAt = String(updated?.fields?.["Merged At"] || "").trim();
-  const hasAnyMergeMarkers =
-    Object.hasOwn(updated?.fields || {}, "Merge Status") ||
-    Object.hasOwn(updated?.fields || {}, "Merged Into Customer") ||
-    Object.hasOwn(updated?.fields || {}, "Merged At");
-
-  const isMarkedMerged =
-    persistedStatus === "merged" &&
-    Boolean(mergedInto?.[0]) &&
-    persistedMergedInto.includes(mergedInto[0]) &&
-    Boolean(persistedMergedAt);
-
-  // Merge markers are optional metadata. The canonical merge is the relink itself.
-  if (!hasAnyMergeMarkers) return;
-
-  if (!isMarkedMerged) {
-    console.warn("[shopify-webhook] customer merge markers incomplete", {
-      guest_customer_record_id: guestCustomerRecordId,
-      canonical_customer_record_id: canonicalCustomerRecordId,
-      persisted_status: persistedStatus || null,
-      persisted_merged_into: persistedMergedInto,
-      persisted_merged_at: persistedMergedAt || null,
-    });
-  }
-};
-
-export const mergeGuestCustomersIntoCanonical = async ({
-  canonicalCustomerRecordId,
-  guestCustomerRecordIds = [],
-}) => {
-  const canonical = normalizeRecordId(canonicalCustomerRecordId);
-  if (!canonical) {
-    return {
-      mergedPairs: [],
-      relinkedSavedConfigurations: 0,
-      relinkedLabels: 0,
-      relinkedOrders: 0,
-    };
-  }
-
-  const candidates = uniqueRecordIds(guestCustomerRecordIds).filter(
-    (recordId) => recordId !== canonical
-  );
-  if (!candidates.length) {
-    return {
-      mergedPairs: [],
-      relinkedSavedConfigurations: 0,
-      relinkedLabels: 0,
-      relinkedOrders: 0,
-    };
-  }
-
-  let relinkedSavedConfigurations = 0;
-  let relinkedLabels = 0;
-  let relinkedOrders = 0;
-  const mergedPairs = [];
-
-  for (const guestId of candidates) {
-    relinkedSavedConfigurations += await relinkTableCustomerField({
-      table: STUDIO_TABLES.savedConfigurations,
-      fieldName: STUDIO_FIELDS.savedConfigurations.customer,
-      fromCustomerId: guestId,
-      toCustomerId: canonical,
-    });
-
-    relinkedLabels += await relinkTableCustomerField({
-      table: STUDIO_TABLES.labels,
-      fieldName: STUDIO_FIELDS.labels.customers,
-      fromCustomerId: guestId,
-      toCustomerId: canonical,
-    });
-
-    relinkedOrders += await relinkTableCustomerField({
-      table: STUDIO_TABLES.orders,
-      fieldName: STUDIO_FIELDS.orders.customer,
-      fromCustomerId: guestId,
-      toCustomerId: canonical,
-    });
-
-    await markGuestCustomerAsMerged({
-      guestCustomerRecordId: guestId,
-      canonicalCustomerRecordId: canonical,
-    });
-
-    mergedPairs.push(`${guestId}->${canonical}`);
-  }
-
-  return {
-    mergedPairs,
-    relinkedSavedConfigurations,
-    relinkedLabels,
-    relinkedOrders,
-  };
-};
-
 const listAddressesByLinkedOrder = async (orderRecordId) => {
   const orderId = normalizeRecordId(orderRecordId);
   if (!orderId) return [];
@@ -1103,7 +927,7 @@ export const collectOrderSignals = async (orderPayload) => {
   }
 
   return {
-    candidateCustomerRecordIds: uniqueRecordIds(Array.from(candidateCustomerIds)),
+    customerRecordIds: uniqueRecordIds(Array.from(candidateCustomerIds)),
     savedConfigurationSignals: Array.from(savedConfigSignals.values()).map((entry) => ({
       saved_configuration_id: entry.saved_configuration_id,
       front_version_ids: uniqueRecordIds(Array.from(entry.front_version_ids)),
@@ -1111,11 +935,6 @@ export const collectOrderSignals = async (orderPayload) => {
       session_ids: uniqueTextValues(Array.from(entry.session_ids), 255),
     })),
   };
-};
-
-export const collectCustomerGuestCandidatesByEmail = async ({ email }) => {
-  const rows = await listGuestCustomersByEmail(email);
-  return uniqueRecordIds(rows.map((row) => row?.id));
 };
 
 const mergeVersionIdsFromLabels = async (labelRecordIds = []) => {

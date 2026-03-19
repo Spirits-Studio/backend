@@ -17,7 +17,6 @@ import {
   normalizeOrderWebhookPayload,
   upsertCanonicalCustomer,
   collectOrderSignals,
-  mergeGuestCustomersIntoCanonical,
   ensureSavedConfigurationOrderLinkage,
   createOrderRecordForSavedConfiguration,
   upsertBillingAddressForOrder,
@@ -35,11 +34,6 @@ const toOrderIdString = (orderId) => {
   const text = String(orderId).trim();
   return text || null;
 };
-
-const sumMergeRelinks = (mergeResult = {}) =>
-  Number(mergeResult?.relinkedSavedConfigurations || 0) +
-  Number(mergeResult?.relinkedLabels || 0) +
-  Number(mergeResult?.relinkedOrders || 0);
 
 export const createShopifyWebhookOrdersHandler = ({
   endpoint,
@@ -159,8 +153,8 @@ export const createShopifyWebhookOrdersHandler = ({
 
     try {
       const signals = await collectOrderSignals(envelope.payload || {});
-      const mergeCandidates = Array.isArray(signals?.candidateCustomerRecordIds)
-        ? signals.candidateCustomerRecordIds
+      const preferredCustomerRecordIds = Array.isArray(signals?.customerRecordIds)
+        ? signals.customerRecordIds
         : [];
 
       const canonicalCustomer = await upsertCanonicalCustomer({
@@ -170,23 +164,11 @@ export const createShopifyWebhookOrdersHandler = ({
         lastName: order?.customer?.last_name,
         phone: order?.customer?.phone,
         shopDomain: envelope?.shop_domain,
-        preferredCustomerRecordIds: mergeCandidates,
+        preferredCustomerRecordIds,
       });
       const canonicalCustomerRecordId = normalizeRecordId(
         canonicalCustomer?.customerRecordId
       );
-
-      const mergeResult = canonicalCustomerRecordId
-        ? await mergeGuestCustomersIntoCanonical({
-            canonicalCustomerRecordId,
-            guestCustomerRecordIds: mergeCandidates,
-          })
-        : {
-            mergedPairs: [],
-            relinkedSavedConfigurations: 0,
-            relinkedLabels: 0,
-            relinkedOrders: 0,
-          };
 
       const savedConfigurationSignals = Array.isArray(signals?.savedConfigurationSignals)
         ? signals.savedConfigurationSignals
@@ -253,12 +235,6 @@ export const createShopifyWebhookOrdersHandler = ({
         webhook_id: envelope.webhook_id || null,
         order_id: toOrderIdString(order?.id),
         canonical_customer_record_id: canonicalCustomerRecordId,
-        merge_candidates_count: mergeCandidates.length,
-        merged_customer_pairs: mergeResult.mergedPairs,
-        merged_records_updated: sumMergeRelinks(mergeResult),
-        relinked_saved_configs: mergeResult.relinkedSavedConfigurations,
-        relinked_labels: mergeResult.relinkedLabels,
-        relinked_orders: mergeResult.relinkedOrders,
         updated_saved_configurations: Array.from(new Set(touchedConfigIds)),
         created_order_records: Array.from(new Set(createdOrderRecordIds)),
         linked_address_records: Array.from(new Set(linkedAddressRecordIds)),
@@ -268,10 +244,6 @@ export const createShopifyWebhookOrdersHandler = ({
 
       logger.info("webhook processed", {
         canonical_customer_record_id: canonicalCustomerRecordId,
-        merge_candidates_count: mergeCandidates.length,
-        relinked_saved_configs: mergeResult.relinkedSavedConfigurations,
-        relinked_labels: mergeResult.relinkedLabels,
-        relinked_orders: mergeResult.relinkedOrders,
         idempotent_skip: false,
         status: "processed",
       });
