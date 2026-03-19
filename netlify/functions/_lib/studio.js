@@ -131,13 +131,51 @@ export const STUDIO_FIELDS = {
   },
 };
 
+export const CUSTOMER_CREATION_SOURCES = {
+  createAirtableCustomerGuest:
+    "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)",
+  createAirtableCustomerLoggedIn:
+    "Logged-in Shopify -> Netlify Backend (create-airtable-customer)",
+  shopifyWebhookCustomersCreate:
+    "Shopify Webhook -> Netlify Backend (shopify-webhook-customers-create)",
+  shopifyWebhookCustomersUpdate:
+    "Shopify Webhook -> Netlify Backend (shopify-webhook-customers-update)",
+  shopifyWebhookOrdersCreate:
+    "Shopify Webhook -> Netlify Backend (shopify-webhook-orders-create)",
+  shopifyWebhookOrdersPaid:
+    "Shopify Webhook -> Netlify Backend (shopify-webhook-orders-paid)",
+  studioSaveConfiguration:
+    "Shopify -> Netlify Backend (studio-save-configuration)",
+  studioSaveLabelVersion:
+    "Shopify -> Netlify Backend (studio-save-label-version)",
+  studioResetLabelLineage:
+    "Shopify -> Netlify Backend (studio-reset-label-lineage)",
+  createOrder:
+    "Shopify -> Netlify Backend (create-order)",
+};
+
+export const CUSTOMER_CREATION_SOURCE_BY_ENDPOINT = {
+  "create-order": CUSTOMER_CREATION_SOURCES.createOrder,
+  "shopify-webhook-customers-create":
+    CUSTOMER_CREATION_SOURCES.shopifyWebhookCustomersCreate,
+  "shopify-webhook-customers-update":
+    CUSTOMER_CREATION_SOURCES.shopifyWebhookCustomersUpdate,
+  "shopify-webhook-orders-create":
+    CUSTOMER_CREATION_SOURCES.shopifyWebhookOrdersCreate,
+  "shopify-webhook-orders-paid":
+    CUSTOMER_CREATION_SOURCES.shopifyWebhookOrdersPaid,
+  "studio-reset-label-lineage":
+    CUSTOMER_CREATION_SOURCES.studioResetLabelLineage,
+  "studio-save-configuration":
+    CUSTOMER_CREATION_SOURCES.studioSaveConfiguration,
+  "studio-save-label-version":
+    CUSTOMER_CREATION_SOURCES.studioSaveLabelVersion,
+};
+
 export const STUDIO_SINGLE_SELECT_OPTIONS = {
   customers: {
     source: ["Shopify", "Direct", "Lead"],
-    creationSource: [
-      "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)",
-      "Logged-in Shopify -> Netlify Backend (create-airtable-customer)",
-    ],
+    creationSource: Object.values(CUSTOMER_CREATION_SOURCES),
   },
   savedConfigurations: {
     status: ["Saved", "Ordered", "Archived"],
@@ -255,6 +293,12 @@ export const normalizeSingleSelectOption = (value, allowedOptions = []) => {
   if (!raw) return null;
   return allowedOptions.includes(raw) ? raw : null;
 };
+
+export const resolveCustomerCreationSource = (endpoint) =>
+  normalizeSingleSelectOption(
+    CUSTOMER_CREATION_SOURCE_BY_ENDPOINT[String(endpoint || "").trim()] || null,
+    STUDIO_SINGLE_SELECT_OPTIONS.customers.creationSource
+  );
 
 export const normalizeOrderStatus = (value) => {
   const raw = String(value || "")
@@ -699,6 +743,7 @@ export const resolveCustomerRecordIdOrCreate = async ({
   const shouldCreate = Boolean(allowCreate || implicitCreateFlag);
   const providedRecordId = normalizeRecordId(providedCustomerRecordId);
   const identity = resolveCustomerIdentity({ body, qs });
+  const customerCreationSource = resolveCustomerCreationSource(endpoint);
   const hasIdentitySignals = Boolean(
     identity.shopifyId || identity.email || identity.phone
   );
@@ -847,6 +892,7 @@ export const resolveCustomerRecordIdOrCreate = async ({
       "First Name": identity.firstName || undefined,
       "Last Name": identity.lastName || undefined,
       Phone: identity.phone || undefined,
+      "Creation Source": customerCreationSource || undefined,
     }
   );
 

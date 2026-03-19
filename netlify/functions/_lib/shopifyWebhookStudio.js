@@ -738,12 +738,6 @@ export const upsertCanonicalCustomer = async ({
     if (normalizedShopDomain && currentFields["Shop Domain"] !== normalizedShopDomain) {
       updates["Shop Domain"] = normalizedShopDomain;
     }
-    if (
-      normalizedCreationSource &&
-      currentFields["Creation Source"] !== normalizedCreationSource
-    ) {
-      updates["Creation Source"] = normalizedCreationSource;
-    }
 
     const updated =
       Object.keys(updates).length > 0

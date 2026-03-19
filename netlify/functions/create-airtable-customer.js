@@ -1,6 +1,7 @@
 import { withShopifyProxy } from "./_lib/shopifyProxy.js";
 import { findOneBy, createOne, updateOne, getOne } from "../../src/lib/airtable.js";
 import {
+  CUSTOMER_CREATION_SOURCES,
   normalizeShopifyCustomerId,
   buildShopifyCustomerIdLookupValues,
   isAirtableLookupRecoverableError,
@@ -220,7 +221,8 @@ export default withShopifyProxy(
             "Phone": phone || undefined,
             "Source": "Shopify",
             "Shop Domain": shop,
-            "Creation Source": "Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
+            "Creation Source":
+              CUSTOMER_CREATION_SOURCES.createAirtableCustomerLoggedIn,
           });
 
           logCustomerResolution({
@@ -319,7 +321,8 @@ export default withShopifyProxy(
           "Phone": phone || undefined,
           "Source": "Shopify",
           "Shop Domain": shop,
-          "Creation Source": "Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
+          "Creation Source":
+            CUSTOMER_CREATION_SOURCES.createAirtableCustomerLoggedIn,
         });
 
         logCustomerResolution({
@@ -345,7 +348,8 @@ export default withShopifyProxy(
       const anon = await createOne(process.env.AIRTABLE_CUSTOMERS_TABLE_ID, {
         "Source": "Shopify",
         "Shop Domain": shop,
-        "Creation Source": "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)"
+        "Creation Source":
+          CUSTOMER_CREATION_SOURCES.createAirtableCustomerGuest,
       });
 
       logCustomerResolution({

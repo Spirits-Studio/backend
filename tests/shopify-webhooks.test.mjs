@@ -37,7 +37,7 @@ const {
 } = await import(
   "../netlify/functions/_lib/shopifyWebhookStudio.js"
 );
-const { STUDIO_FIELDS, STUDIO_TABLES } = await import(
+const { CUSTOMER_CREATION_SOURCES, STUDIO_FIELDS, STUDIO_TABLES } = await import(
   "../netlify/functions/_lib/studio.js"
 );
 
@@ -1990,6 +1990,79 @@ test("upsertCanonicalCustomer guest fallback ignores stale preferred records and
     assert.equal(result.created, false);
     assert.equal(result.matchedBy, "phone");
     assert.equal(result.updated, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("upsertCanonicalCustomer creates new customers with the supplied creation source", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='7010')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/7010')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='created-via-order@example.com')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "7010");
+        assert.equal(fields.Email, "created-via-order@example.com");
+        assert.equal(fields.Source, "Shopify");
+        assert.equal(
+          fields["Creation Source"],
+          CUSTOMER_CREATION_SOURCES.shopifyWebhookOrdersCreate
+        );
+      },
+      response: {
+        records: [{ id: "recCreatedViaOrdersCreateWebhook", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const result = await upsertCanonicalCustomer({
+      shopifyId: "gid://shopify/Customer/7010",
+      email: "created-via-order@example.com",
+      firstName: "Order",
+      lastName: "Webhook",
+      creationSource: CUSTOMER_CREATION_SOURCES.shopifyWebhookOrdersCreate,
+    });
+
+    assert.equal(result.customerRecordId, "recCreatedViaOrdersCreateWebhook");
+    assert.equal(result.created, true);
+    assert.equal(result.matchedBy, "shopify_id");
+    assert.equal(result.updated, false);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();

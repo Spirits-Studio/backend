@@ -20,7 +20,7 @@ const { default: studioConfiguration } = await import(
 const { default: createAirtableCustomer } = await import(
   "../netlify/functions/create-airtable-customer.js"
 );
-const { STUDIO_FIELDS, STUDIO_TABLES } = await import(
+const { CUSTOMER_CREATION_SOURCES, STUDIO_FIELDS, STUDIO_TABLES } = await import(
   "../netlify/functions/_lib/studio.js"
 );
 
@@ -327,6 +327,10 @@ test("create-airtable-customer stores Shopify customer ids in numeric form", asy
         assert.equal(fields.Email, "legacy@example.com");
         assert.equal(fields["First Name"], "Legacy");
         assert.equal(fields["Last Name"], "User");
+        assert.equal(
+          fields["Creation Source"],
+          CUSTOMER_CREATION_SOURCES.createAirtableCustomerLoggedIn
+        );
       },
       response: {
         records: [{ id: "recCreatedCustomer9001", fields: {} }],
@@ -946,6 +950,10 @@ test("studio-save-configuration auto-creates customer when stale id is provided 
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
         assert.equal(fields["Shopify ID"], undefined);
+        assert.equal(
+          fields["Creation Source"],
+          CUSTOMER_CREATION_SOURCES.studioSaveConfiguration
+        );
       },
       response: {
         records: [{ id: "recCustomerRecreatedLegacyA", fields: {} }],
@@ -1046,6 +1054,10 @@ test("studio-save-configuration auto-creates customer for stale id when signed i
         const fields = call.body?.records?.[0]?.fields || {};
         assert.equal(fields["Shopify ID"], "9001");
         assert.equal(fields.Email, "legacy@example.com");
+        assert.equal(
+          fields["Creation Source"],
+          CUSTOMER_CREATION_SOURCES.studioSaveConfiguration
+        );
       },
       response: {
         records: [{ id: "recCustomerRecreatedB", fields: {} }],

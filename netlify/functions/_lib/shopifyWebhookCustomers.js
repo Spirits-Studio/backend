@@ -17,7 +17,7 @@ import {
   normalizeCustomerWebhookPayload,
   upsertCanonicalCustomer,
 } from "./shopifyWebhookStudio.js";
-import { normalizeRecordId } from "./studio.js";
+import { normalizeRecordId, resolveCustomerCreationSource } from "./studio.js";
 
 export const createShopifyWebhookCustomersHandler = ({
   endpoint,
@@ -143,6 +143,7 @@ export const createShopifyWebhookCustomersHandler = ({
         lastName: customer?.last_name,
         phone: customer?.phone,
         shopDomain: envelope?.shop_domain,
+        creationSource: resolveCustomerCreationSource(endpoint),
       });
 
       const canonicalCustomerRecordId = normalizeRecordId(

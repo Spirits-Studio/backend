@@ -27,6 +27,7 @@ import {
   getLinkedIds,
   getRecordOrNull,
   normalizeRecordId,
+  resolveCustomerCreationSource,
 } from "./_lib/studio.js";
 
 const toOrderIdString = (orderId) => {
@@ -164,6 +165,7 @@ export const createShopifyWebhookOrdersHandler = ({
         lastName: order?.customer?.last_name,
         phone: order?.customer?.phone,
         shopDomain: envelope?.shop_domain,
+        creationSource: resolveCustomerCreationSource(endpoint),
         preferredCustomerRecordIds,
       });
       const canonicalCustomerRecordId = normalizeRecordId(
