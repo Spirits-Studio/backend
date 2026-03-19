@@ -9,8 +9,10 @@ export const SHOPIFY_WEBHOOK_HEADERS = {
   hmac: "x-shopify-hmac-sha256",
 };
 
-export const WEBHOOK_EVENTS_TABLE =
-  process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID || "Webhook Events";
+export const getWebhookEventsTable = () =>
+  process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID ||
+  process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE ||
+  null;
 
 const IDEMPOTENCY_STATUS = {
   received: "received",
@@ -288,7 +290,7 @@ const shouldAttemptIdempotency = () => {
     String(process.env.SHOPIFY_WEBHOOK_IDEMPOTENCY_DISABLED || "")
       .trim()
       .toLowerCase() === "true";
-  return !disabled;
+  return !disabled && Boolean(getWebhookEventsTable());
 };
 
 export const beginWebhookIdempotency = async ({
@@ -308,7 +310,8 @@ export const beginWebhookIdempotency = async ({
   }
 
   try {
-    const existing = await findOneBy(WEBHOOK_EVENTS_TABLE, "Webhook ID", webhookId);
+    const webhookEventsTable = getWebhookEventsTable();
+    const existing = await findOneBy(webhookEventsTable, "Webhook ID", webhookId);
     if (existing?.id) {
       const existingStatus = normalizeIdempotencyStatus(existing?.fields?.Status);
       if (existingStatus && terminalIdempotentStatuses.has(existingStatus)) {
@@ -331,7 +334,7 @@ export const beginWebhookIdempotency = async ({
     }
 
     const created = await createResilient(
-      WEBHOOK_EVENTS_TABLE,
+      webhookEventsTable,
       {},
       {
         "Webhook ID": webhookId,
@@ -374,8 +377,9 @@ export const completeWebhookIdempotency = async ({
   if (!recordId) return;
 
   try {
+    const webhookEventsTable = getWebhookEventsTable();
     await updateResilient(
-      WEBHOOK_EVENTS_TABLE,
+      webhookEventsTable,
       recordId,
       {},
       {

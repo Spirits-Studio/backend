@@ -27,7 +27,10 @@ const { default: shopifyWebhookCustomersUpdate } = await import(
 const { createWebhookVerificationDebugInfo } = await import(
   "../netlify/functions/_lib/shopifyWebhook.js"
 );
-const { mergeGuestCustomersIntoCanonical } = await import(
+const {
+  mergeGuestCustomersIntoCanonical,
+  createOrderRecordForSavedConfiguration,
+} = await import(
   "../netlify/functions/_lib/shopifyWebhookStudio.js"
 );
 const { STUDIO_FIELDS, STUDIO_TABLES } = await import(
@@ -584,6 +587,101 @@ test("customers/update webhook returns a Web Response for Request-based invocati
   }
 });
 
+test("orders webhook processes without webhook idempotency storage when no webhook table is configured", async () => {
+  const previousWebhookEventsTableId = process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID;
+  const previousWebhookEventsTable = process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE;
+
+  delete process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID;
+  delete process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE;
+
+  try {
+    const req = createWebhookRequest({
+      topic: "orders/create",
+      webhookId: "wh_no_webhook_table_1",
+      payload: {
+        id: 10004,
+        line_items: [],
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersCreate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.status, "processed");
+  } finally {
+    if (previousWebhookEventsTableId == null) {
+      delete process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID;
+    } else {
+      process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID = previousWebhookEventsTableId;
+    }
+
+    if (previousWebhookEventsTable == null) {
+      delete process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE;
+    } else {
+      process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE = previousWebhookEventsTable;
+    }
+  }
+});
+
+test("order record helper updates existing order for the same order id and saved configuration", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Orders & Fulfilment",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(
+          formula,
+          "AND({Order ID}='7786446422362',FIND('recSavedConfigA', ARRAYJOIN({Saved Configuration})))"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recExistingOrderA",
+            fields: {
+              "Order ID": "7786446422362",
+              "Saved Configuration": ["recSavedConfigA"],
+              "Order Status": "Order Received",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Orders & Fulfilment",
+      recordId: "recExistingOrderA",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Order ID"], "7786446422362");
+        assert.deepEqual(fields["Saved Configuration"], ["recSavedConfigA"]);
+        assert.deepEqual(fields.Customer, ["recCanonicalCustomer"]);
+        assert.equal(fields["Order Status"], "Paid");
+      },
+      response: {
+        records: [{ id: "recExistingOrderA", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const record = await createOrderRecordForSavedConfiguration({
+      orderId: "7786446422362",
+      orderStatus: "Paid",
+      savedConfigurationRecordId: "recSavedConfigA",
+      customerRecordIds: ["recCanonicalCustomer"],
+    });
+
+    assert.equal(record?.id, "recExistingOrderA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("idempotency retries previously failed webhook ids instead of skipping", async () => {
   const fetchMock = installFetchSequence([
     {
@@ -871,6 +969,17 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
           [STUDIO_FIELDS.savedConfigurations.currentFrontLabelVersion]: [],
         },
       },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "AND({Order ID}='123456789',FIND('recSavedConfigA', ARRAYJOIN({Saved Configuration})))"
+        );
+      },
+      response: { records: [] },
     },
     {
       method: "POST",
@@ -1188,6 +1297,17 @@ test("guest order with _session_id only resolves saved configuration and links o
           [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
         },
       },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "AND({Order ID}='987001',FIND('recSavedBySession', ARRAYJOIN({Saved Configuration})))"
+        );
+      },
+      response: { records: [] },
     },
     {
       method: "POST",

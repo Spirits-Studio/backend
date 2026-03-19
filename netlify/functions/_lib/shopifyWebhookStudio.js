@@ -822,12 +822,40 @@ export const createOrderRecordForSavedConfiguration = async ({
   if (!savedConfigId) return null;
 
   const linkedCustomerIds = uniqueRecordIds(customerRecordIds);
+  const normalizedOrderId = normalizeText(orderId, 255);
+  const safeSavedConfigId = escapeFormulaValue(savedConfigId);
 
-  return createResilient(STUDIO_TABLES.orders, {}, {
-    [STUDIO_FIELDS.orders.orderId]: normalizeText(orderId, 255) || undefined,
+  const formulaParts = [
+    `FIND('${safeSavedConfigId}', ARRAYJOIN({${STUDIO_FIELDS.orders.savedConfiguration}}))`,
+  ];
+  if (normalizedOrderId) {
+    formulaParts.unshift(
+      `{${STUDIO_FIELDS.orders.orderId}}='${escapeFormulaValue(normalizedOrderId)}'`
+    );
+  }
+
+  const existingOrderRecords = await listAllRecords(STUDIO_TABLES.orders, {
+    filterByFormula:
+      formulaParts.length > 1 ? `AND(${formulaParts.join(",")})` : formulaParts[0],
+    maxRecords: 1,
+  });
+
+  const fields = {
+    [STUDIO_FIELDS.orders.orderId]: normalizedOrderId || undefined,
     [STUDIO_FIELDS.orders.customer]:
       linkedCustomerIds.length > 0 ? linkedCustomerIds : undefined,
     [STUDIO_FIELDS.orders.savedConfiguration]: [savedConfigId],
-    [STUDIO_FIELDS.orders.orderStatus]: normalizeText(orderStatus, 120) || "Order Received",
-  });
+    [STUDIO_FIELDS.orders.orderStatus]:
+      normalizeText(orderStatus, 120) || "Order Received",
+  };
+
+  const existingOrderRecord = Array.isArray(existingOrderRecords)
+    ? existingOrderRecords[0] || null
+    : null;
+
+  if (existingOrderRecord?.id) {
+    return updateResilient(STUDIO_TABLES.orders, existingOrderRecord.id, {}, fields);
+  }
+
+  return createResilient(STUDIO_TABLES.orders, {}, fields);
 };
