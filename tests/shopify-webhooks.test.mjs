@@ -663,13 +663,18 @@ test("order record helper updates existing order for the same order id and saved
       table: "Orders & Fulfilment",
       assert: (call) => {
         const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(
-          formula,
-          "AND({Order ID}='7786446422362',FIND('recSavedConfigA', ARRAYJOIN({Saved Configuration})))"
-        );
+        assert.equal(formula, "{Order ID}='7786446422362'");
       },
       response: {
         records: [
+          {
+            id: "recDifferentOrderForSameShopifyOrderId",
+            fields: {
+              "Order ID": "7786446422362",
+              "Saved Configuration": ["recOtherSavedConfig"],
+              "Order Status": "Ordered",
+            },
+          },
           {
             id: "recExistingOrderA",
             fields: {
@@ -724,10 +729,7 @@ test("order record helper copies saved configuration snapshot fields into Orders
       table: "Orders & Fulfilment",
       assert: (call) => {
         const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(
-          formula,
-          "AND({Order ID}='7786446422999',FIND('recSavedConfigSnapshot', ARRAYJOIN({Saved Configuration})))"
-        );
+        assert.equal(formula, "{Order ID}='7786446422999'");
       },
       response: { records: [] },
     },
@@ -940,7 +942,7 @@ test("orders webhook creates and links billing address records", async () => {
       assert: (call) => {
         assert.equal(
           call.url.searchParams.get("filterByFormula"),
-          "AND({Order ID}='321654987',FIND('recSavedConfigBilling', ARRAYJOIN({Saved Configuration})))"
+          "{Order ID}='321654987'"
         );
       },
       response: { records: [] },
@@ -1382,7 +1384,7 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
       assert: (call) => {
         assert.equal(
           call.url.searchParams.get("filterByFormula"),
-          "AND({Order ID}='123456789',FIND('recSavedConfigA', ARRAYJOIN({Saved Configuration})))"
+          "{Order ID}='123456789'"
         );
       },
       response: { records: [] },
@@ -1710,7 +1712,7 @@ test("guest order with _session_id only resolves saved configuration and links o
       assert: (call) => {
         assert.equal(
           call.url.searchParams.get("filterByFormula"),
-          "AND({Order ID}='987001',FIND('recSavedBySession', ARRAYJOIN({Saved Configuration})))"
+          "{Order ID}='987001'"
         );
       },
       response: { records: [] },

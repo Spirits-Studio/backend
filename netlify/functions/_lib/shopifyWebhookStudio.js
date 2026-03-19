@@ -1259,22 +1259,14 @@ export const createOrderRecordForSavedConfiguration = async ({
   const linkedCustomerIds = uniqueRecordIds(customerRecordIds);
   const normalizedOrderId = normalizeText(orderId, 255);
   const normalizedOrderStatus = normalizeOrderStatus(orderStatus) || "Ordered";
-  const safeSavedConfigId = escapeFormulaValue(savedConfigId);
-
-  const formulaParts = [
-    `FIND('${safeSavedConfigId}', ARRAYJOIN({${STUDIO_FIELDS.orders.savedConfiguration}}))`,
-  ];
-  if (normalizedOrderId) {
-    formulaParts.unshift(
-      `{${STUDIO_FIELDS.orders.orderId}}='${escapeFormulaValue(normalizedOrderId)}'`
-    );
-  }
-
-  const existingOrderRecords = await listAllRecords(STUDIO_TABLES.orders, {
-    filterByFormula:
-      formulaParts.length > 1 ? `AND(${formulaParts.join(",")})` : formulaParts[0],
-    maxRecords: 1,
-  });
+  const existingOrderRecords = normalizedOrderId
+    ? await listAllRecords(STUDIO_TABLES.orders, {
+        filterByFormula: `{${STUDIO_FIELDS.orders.orderId}}='${escapeFormulaValue(
+          normalizedOrderId
+        )}'`,
+        maxRecords: 25,
+      })
+    : [];
 
   const fields = {
     [STUDIO_FIELDS.orders.orderId]: normalizedOrderId || undefined,
@@ -1286,7 +1278,9 @@ export const createOrderRecordForSavedConfiguration = async ({
   };
 
   const existingOrderRecord = Array.isArray(existingOrderRecords)
-    ? existingOrderRecords[0] || null
+    ? existingOrderRecords.find((record) =>
+        getLinkedIds(record, STUDIO_FIELDS.orders.savedConfiguration).includes(savedConfigId)
+      ) || null
     : null;
 
   if (existingOrderRecord?.id) {
