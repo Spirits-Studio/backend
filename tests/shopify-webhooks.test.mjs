@@ -6,10 +6,11 @@ process.env.SHOPIFY_WEBHOOK_SECRET = "test-webhook-secret";
 process.env.AIRTABLE_BASE_ID = "appTestBase";
 process.env.AIRTABLE_TOKEN = "patTestToken";
 process.env.AIRTABLE_CUSTOMERS_TABLE_ID = "Customers";
+process.env.AIRTABLE_ADDRESSES_TABLE_ID = "Addresses";
 process.env.AIRTABLE_SAVED_CONFIGS_TABLE_ID = "Saved Configurations";
 process.env.AIRTABLE_LABELS_TABLE_ID = "Labels";
 process.env.AIRTABLE_LABEL_VERSIONS_TABLE_ID = "Label Versions";
-process.env.AIRTABLE_ORDERS_TABLE_ID = "Orders & Fulfilment";
+process.env.AIRTABLE_ORDERS_FULFILLMENT_TABLE_ID = "Orders & Fulfilment";
 process.env.AIRTABLE_WEBHOOK_EVENTS_TABLE_ID = "Webhook Events";
 
 const { default: shopifyWebhookOrdersCreate } = await import(
@@ -24,7 +25,10 @@ const { default: shopifyWebhookCustomersCreate } = await import(
 const { default: shopifyWebhookCustomersUpdate } = await import(
   "../netlify/functions/shopify-webhook-customers-update.js"
 );
-const { createWebhookVerificationDebugInfo } = await import(
+const {
+  createWebhookVerificationDebugInfo,
+  createWebhookPayloadDebugInfo,
+} = await import(
   "../netlify/functions/_lib/shopifyWebhook.js"
 );
 const {
@@ -232,6 +236,33 @@ test("webhook verification debug info redacts secrets and hmacs", () => {
     info.verification_debug.shop_domain_header,
     "wnbrmm-sg.myshopify.com"
   );
+});
+
+test("webhook payload debug info includes full raw body and parsed payload", () => {
+  const info = createWebhookPayloadDebugInfo({
+    envelope: {
+      topic: "orders/paid",
+      shop_domain: "wnbrmm-sg.myshopify.com",
+      webhook_id: "wh_payload_debug_1",
+      received_at: "2026-03-19T03:00:00.000Z",
+      headers: {
+        "content-type": "application/json",
+        "x-shopify-topic": "orders/paid",
+      },
+      rawBody: '{"id":123,"email":"debug@example.com"}',
+      payload: { id: 123, email: "debug@example.com" },
+    },
+  });
+
+  assert.equal(info.request_debug.topic, "orders/paid");
+  assert.equal(info.request_debug.shop_domain, "wnbrmm-sg.myshopify.com");
+  assert.equal(info.request_debug.webhook_id, "wh_payload_debug_1");
+  assert.equal(info.request_debug.raw_body, '{"id":123,"email":"debug@example.com"}');
+  assert.deepEqual(info.request_debug.parsed_payload, {
+    id: 123,
+    email: "debug@example.com",
+  });
+  assert.equal(info.request_debug.headers["x-shopify-topic"], "orders/paid");
 });
 
 test("duplicate webhook delivery is idempotently skipped", async () => {
@@ -644,7 +675,7 @@ test("order record helper updates existing order for the same order id and saved
             fields: {
               "Order ID": "7786446422362",
               "Saved Configuration": ["recSavedConfigA"],
-              "Order Status": "Order Received",
+              "Order Status": "Ordered",
             },
           },
         ],
@@ -659,7 +690,7 @@ test("order record helper updates existing order for the same order id and saved
         assert.equal(fields["Order ID"], "7786446422362");
         assert.deepEqual(fields["Saved Configuration"], ["recSavedConfigA"]);
         assert.deepEqual(fields.Customer, ["recCanonicalCustomer"]);
-        assert.equal(fields["Order Status"], "Paid");
+        assert.equal(fields["Order Status"], "Ordered");
       },
       response: {
         records: [{ id: "recExistingOrderA", fields: {} }],
@@ -712,7 +743,7 @@ test("order record helper copies saved configuration snapshot fields into Orders
         assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
           "recSavedConfigSnapshot",
         ]);
-        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Paid");
+        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Ordered");
         assert.equal(fields[STUDIO_FIELDS.orders.configurationId], "cfg_123");
         assert.equal(fields[STUDIO_FIELDS.orders.sessionId], "session-123");
         assert.equal(fields[STUDIO_FIELDS.orders.configuratorTool], "Build Your Rum Brand");
@@ -801,6 +832,256 @@ test("order record helper copies saved configuration snapshot fields into Orders
     });
 
     assert.equal(record?.id, "recOrderSnapshotA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("orders webhook creates and links billing address records", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_order_billing_address_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookBillingAddress1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='9010')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recCanonicalBillingCustomer",
+            fields: {
+              "Shopify ID": "9010",
+              Email: "billing@example.com",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCanonicalBillingCustomer",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["First Name"], "Marcus");
+        assert.equal(fields["Last Name"], "Buyer");
+        assert.equal(fields.Phone, "+447700900123");
+        assert.equal(fields.Source, "Shopify");
+        assert.equal(fields["Shop Domain"], "wnbrmm-sg.myshopify.com");
+      },
+      response: {
+        records: [{ id: "recCanonicalBillingCustomer", fields: {} }],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigBilling",
+      response: {
+        id: "recSavedConfigBilling",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: [
+            "recCanonicalBillingCustomer",
+          ],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "AND(LOWER({Email})='billing@example.com', OR({Shopify ID}=BLANK(), {Shopify ID}=''))"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigBilling",
+      response: {
+        id: "recSavedConfigBilling",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: [
+            "recCanonicalBillingCustomer",
+          ],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "AND({Order ID}='321654987',FIND('recSavedConfigBilling', ARRAYJOIN({Saved Configuration})))"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.orders.orderId], "321654987");
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], [
+          "recCanonicalBillingCustomer",
+        ]);
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
+          "recSavedConfigBilling",
+        ]);
+      },
+      response: { records: [{ id: "recOrderBillingAddress", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.addresses,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='987654321')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.addresses,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "FIND('recOrderBillingAddress', ARRAYJOIN({Orders & Fulfilment}))"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.addresses,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.addresses.fullAddress], "Marcus Buyer, 1 Test Street, Studio 2, London, Greater London, SW1A 1AA, United Kingdom");
+        assert.deepEqual(fields[STUDIO_FIELDS.addresses.customer], [
+          "recCanonicalBillingCustomer",
+        ]);
+        assert.deepEqual(fields[STUDIO_FIELDS.addresses.orders], [
+          "recOrderBillingAddress",
+        ]);
+        assert.equal(fields[STUDIO_FIELDS.addresses.firstName], "Marcus");
+        assert.equal(fields[STUDIO_FIELDS.addresses.lastName], "Buyer");
+        assert.equal(fields[STUDIO_FIELDS.addresses.shopifyId], "987654321");
+        assert.equal(fields[STUDIO_FIELDS.addresses.streetAddress1], "1 Test Street");
+        assert.equal(fields[STUDIO_FIELDS.addresses.streetAddress2], "Studio 2");
+        assert.equal(fields[STUDIO_FIELDS.addresses.townCity], "London");
+        assert.equal(fields[STUDIO_FIELDS.addresses.county], "Greater London");
+        assert.equal(fields[STUDIO_FIELDS.addresses.postalCode], "SW1A 1AA");
+        assert.equal(fields[STUDIO_FIELDS.addresses.country], "United Kingdom");
+        assert.equal(fields[STUDIO_FIELDS.addresses.phone], "+447700900123");
+      },
+      response: { records: [{ id: "recBillingAddress1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigBilling",
+      response: {
+        id: "recSavedConfigBilling",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: [
+            "recCanonicalBillingCustomer",
+          ],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigBilling",
+      response: { records: [{ id: "recSavedConfigBilling", fields: {} }] },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookBillingAddress1",
+      response: { records: [{ id: "recWebhookBillingAddress1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "orders/paid",
+      webhookId: "wh_order_billing_address_1",
+      payload: {
+        id: 321654987,
+        email: "billing@example.com",
+        customer: {
+          id: 9010,
+          email: "billing@example.com",
+          first_name: "Marcus",
+          last_name: "Buyer",
+          phone: "+447700900123",
+        },
+        billing_address: {
+          id: 987654321,
+          first_name: "Marcus",
+          last_name: "Buyer",
+          address1: "1 Test Street",
+          address2: "Studio 2",
+          city: "London",
+          province: "Greater London",
+          zip: "SW1A 1AA",
+          country: "United Kingdom",
+          phone: "+447700900123",
+        },
+        line_items: [
+          {
+            id: 11,
+            properties: [
+              {
+                name: "_saved_configuration_id",
+                value: "recSavedConfigBilling",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersPaid(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.deepEqual(res.body?.linked_address_records, ["recBillingAddress1"]);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
@@ -1116,7 +1397,7 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
         assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
           "recSavedConfigA",
         ]);
-        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Order Received");
+        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Ordered");
       },
       response: { records: [{ id: "recOrderNew1", fields: {} }] },
     },
@@ -1154,7 +1435,7 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
       recordId: "recSavedConfigA",
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
-        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.status], "Order Received");
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.status], "Ordered");
         assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.order], ["recOrderNew1"]);
         assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.currentFrontLabelVersion], [
           "recVersionFrontCurrent",
@@ -1466,7 +1747,7 @@ test("guest order with _session_id only resolves saved configuration and links o
       recordId: "recSavedBySession",
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
-        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.status], "Order Received");
+        assert.equal(fields[STUDIO_FIELDS.savedConfigurations.status], "Ordered");
         assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.order], [
           "recOrderSessionOnly",
         ]);

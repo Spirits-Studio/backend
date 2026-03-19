@@ -7,7 +7,7 @@ process.env.SHOPIFY_STORE_DOMAIN = "spiritsstudio.co.uk";
 process.env.SHOPIFY_WEBHOOK_SECRET = "test-webhook-secret";
 process.env.AIRTABLE_BASE_ID = "appTestBase";
 process.env.AIRTABLE_TOKEN = "patTestToken";
-process.env.AIRTABLE_ORDERS_TABLE_ID = "Orders & Fulfilment";
+process.env.AIRTABLE_ORDERS_FULFILLMENT_TABLE_ID = "Orders & Fulfilment";
 
 const { default: studioSaveConfiguration } = await import(
   "../netlify/functions/studio-save-configuration.js"

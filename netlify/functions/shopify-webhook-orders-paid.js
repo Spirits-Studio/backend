@@ -3,7 +3,7 @@ import { createShopifyWebhookOrdersHandler } from "./shopify-webhook-orders-crea
 const shopifyWebhookOrdersPaid = createShopifyWebhookOrdersHandler({
   endpoint: "shopify-webhook-orders-paid",
   expectedTopic: "orders/paid",
-  orderStatus: "Paid",
+  orderStatus: "Ordered",
 });
 
 export default shopifyWebhookOrdersPaid;

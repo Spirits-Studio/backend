@@ -107,7 +107,7 @@ export default async (req, res) => {
         [STUDIO_FIELDS.orders.customer]: toLinkedRecordArray(customerRecordId),
         [STUDIO_FIELDS.orders.savedConfiguration]:
           toLinkedRecordArray(savedConfigurationRecordId),
-        [STUDIO_FIELDS.orders.orderStatus]: "Order Received",
+        [STUDIO_FIELDS.orders.orderStatus]: "Ordered",
         [STUDIO_FIELDS.orders.addresses]:
           addressIds.length ? toLinkedRecordArray(...addressIds) : undefined,
       }

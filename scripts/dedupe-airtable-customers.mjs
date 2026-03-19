@@ -12,7 +12,7 @@ const TABLES = {
   labelVersions:
     process.env.AIRTABLE_LABEL_VERSIONS_TABLE_ID || "Label Versions",
   orders:
-    process.env.AIRTABLE_ORDERS_TABLE_ID ||
+    process.env.AIRTABLE_ORDERS_FULFILLMENT_TABLE_ID ||
     process.env.AIRTABLE_ORDERS_TABLE ||
     "Orders & Fulfilment",
 };

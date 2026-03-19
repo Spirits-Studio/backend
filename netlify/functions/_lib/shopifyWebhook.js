@@ -224,6 +224,22 @@ export const createWebhookVerificationDebugInfo = ({
   };
 };
 
+export const createWebhookPayloadDebugInfo = ({ envelope = {} } = {}) => ({
+  request_debug: {
+    enabled: true,
+    topic: envelope?.topic || null,
+    shop_domain: envelope?.shop_domain || null,
+    webhook_id: envelope?.webhook_id || null,
+    received_at: envelope?.received_at || null,
+    headers: normalizeWebhookHeaders(envelope?.headers || {}),
+    raw_body: String(envelope?.rawBody || ""),
+    parsed_payload: envelope?.payload || {},
+    parse_error: envelope?.parseError
+      ? mapWebhookErrorMessage(envelope.parseError, 10_000)
+      : null,
+  },
+});
+
 export const hashWebhookPayload = (rawBody) =>
   crypto.createHash("sha256").update(rawBody || "", "utf8").digest("hex");
 

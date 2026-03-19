@@ -9,6 +9,7 @@ import {
   mapWebhookErrorMessage,
   shouldLogWebhookVerificationDebug,
   createWebhookVerificationDebugInfo,
+  createWebhookPayloadDebugInfo,
   sendWebhookJson,
   sendWebhookText,
 } from "./_lib/shopifyWebhook.js";
@@ -19,6 +20,7 @@ import {
   mergeGuestCustomersIntoCanonical,
   ensureSavedConfigurationOrderLinkage,
   createOrderRecordForSavedConfiguration,
+  upsertBillingAddressForOrder,
 } from "./_lib/shopifyWebhookStudio.js";
 import {
   STUDIO_FIELDS,
@@ -67,6 +69,9 @@ export const createShopifyWebhookOrdersHandler = ({
       logger.warn("invalid JSON payload", {
         status: "error",
         error: mapWebhookErrorMessage(envelope.parseError),
+        ...(shouldLogWebhookVerificationDebug()
+          ? createWebhookPayloadDebugInfo({ envelope })
+          : {}),
       });
       return sendJson(400, {
         ok: false,
@@ -87,6 +92,10 @@ export const createShopifyWebhookOrdersHandler = ({
           : {}),
       });
       return sendText(401, "invalid hmac");
+    }
+
+    if (shouldLogWebhookVerificationDebug()) {
+      logger.info("webhook request payload", createWebhookPayloadDebugInfo({ envelope }));
     }
 
     const payloadHash = hashWebhookPayload(envelope.rawBody);
@@ -156,7 +165,6 @@ export const createShopifyWebhookOrdersHandler = ({
         lastName: order?.customer?.last_name,
         phone: order?.customer?.phone,
         shopDomain: envelope?.shop_domain,
-        creationSource: `${endpoint || "shopify-webhook-orders"} (${expectedTopic || envelope.topic || "orders"})`,
       });
       const canonicalCustomerRecordId = normalizeRecordId(
         canonicalCustomer?.customerRecordId
@@ -184,6 +192,7 @@ export const createShopifyWebhookOrdersHandler = ({
 
       const touchedConfigIds = [];
       const createdOrderRecordIds = [];
+      const linkedAddressRecordIds = [];
 
       for (const signal of savedConfigurationSignals) {
         const savedConfigurationRecordId = normalizeRecordId(
@@ -209,6 +218,12 @@ export const createShopifyWebhookOrdersHandler = ({
           customerRecordIds: linkedCustomerIds,
         });
 
+        const billingAddressRecord = await upsertBillingAddressForOrder({
+          order,
+          customerRecordIds: linkedCustomerIds,
+          orderRecordId: orderRecord?.id || null,
+        });
+
         const preferredFrontVersionId = normalizeRecordId(
           signal?.front_version_ids?.[0]
         );
@@ -227,6 +242,7 @@ export const createShopifyWebhookOrdersHandler = ({
 
         touchedConfigIds.push(savedConfigurationRecordId);
         if (orderRecord?.id) createdOrderRecordIds.push(orderRecord.id);
+        if (billingAddressRecord?.id) linkedAddressRecordIds.push(billingAddressRecord.id);
       }
 
       const responsePayload = {
@@ -243,6 +259,7 @@ export const createShopifyWebhookOrdersHandler = ({
         relinked_orders: mergeResult.relinkedOrders,
         updated_saved_configurations: Array.from(new Set(touchedConfigIds)),
         created_order_records: Array.from(new Set(createdOrderRecordIds)),
+        linked_address_records: Array.from(new Set(linkedAddressRecordIds)),
         idempotent_skip: false,
         status: "processed",
       };
@@ -290,7 +307,7 @@ export const createShopifyWebhookOrdersHandler = ({
 const shopifyWebhookOrdersCreate = createShopifyWebhookOrdersHandler({
   endpoint: "shopify-webhook-orders-create",
   expectedTopic: "orders/create",
-  orderStatus: "Order Received",
+  orderStatus: "Ordered",
 });
 
 export default shopifyWebhookOrdersCreate;

@@ -9,6 +9,7 @@ import {
   mapWebhookErrorMessage,
   shouldLogWebhookVerificationDebug,
   createWebhookVerificationDebugInfo,
+  createWebhookPayloadDebugInfo,
   sendWebhookJson,
   sendWebhookText,
 } from "./shopifyWebhook.js";
@@ -54,6 +55,9 @@ export const createShopifyWebhookCustomersHandler = ({
       logger.warn("invalid JSON payload", {
         status: "error",
         error: mapWebhookErrorMessage(envelope.parseError),
+        ...(shouldLogWebhookVerificationDebug()
+          ? createWebhookPayloadDebugInfo({ envelope })
+          : {}),
       });
       return sendJson(400, {
         ok: false,
@@ -74,6 +78,10 @@ export const createShopifyWebhookCustomersHandler = ({
           : {}),
       });
       return sendText(401, "invalid hmac");
+    }
+
+    if (shouldLogWebhookVerificationDebug()) {
+      logger.info("webhook request payload", createWebhookPayloadDebugInfo({ envelope }));
     }
 
     const payloadHash = hashWebhookPayload(envelope.rawBody);
@@ -142,7 +150,6 @@ export const createShopifyWebhookCustomersHandler = ({
         lastName: customer?.last_name,
         phone: customer?.phone,
         shopDomain: envelope?.shop_domain,
-        creationSource: `${endpoint || "shopify-webhook-customers"} (${expectedTopic || envelope.topic || "customers"})`,
       });
 
       const canonicalCustomerRecordId = normalizeRecordId(

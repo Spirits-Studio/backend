@@ -3,8 +3,12 @@ import {
   STUDIO_TABLES,
   STUDIO_FIELDS,
   STUDIO_FIELD_FALLBACKS,
+  STUDIO_SINGLE_SELECT_OPTIONS,
   firstNonEmpty,
   normalizeRecordId,
+  normalizeOrderStatus,
+  normalizeSavedConfigurationStatusFromOrderStatus,
+  normalizeSingleSelectOption,
   getLinkedIds,
   getFieldValue,
   buildLinkedPatch,
@@ -41,6 +45,24 @@ export const normalizeShopifyCustomerId = (value) => {
 const normalizePhone = (value) => normalizeText(value, 60);
 
 const normalizeName = (value) => normalizeText(value, 120);
+
+const normalizeCustomerCreationSource = (value) =>
+  normalizeSingleSelectOption(
+    value,
+    STUDIO_SINGLE_SELECT_OPTIONS.customers.creationSource
+  );
+
+const normalizeOrderCreationSource = (value) =>
+  normalizeSingleSelectOption(
+    value,
+    STUDIO_SINGLE_SELECT_OPTIONS.orders.creationSource
+  );
+
+const normalizeAddressId = (value) => {
+  const text = normalizeText(value, 255);
+  if (!text) return null;
+  return normalizeRecordId(text) ? null : text;
+};
 
 const normalizeLineItemPropertyKey = (value) => normalizeText(value, 120);
 
@@ -102,6 +124,119 @@ const uniqueTextValues = (values = [], maxLen = 255) => {
     if (text && !out.includes(text)) out.push(text);
   }
   return out;
+};
+
+const uniqueLinkedRecordIds = (...values) =>
+  uniqueRecordIds(
+    values.flatMap((value) => {
+      if (!value) return [];
+      return Array.isArray(value) ? value : [value];
+    })
+  );
+
+const buildFullAddress = ({
+  firstName,
+  lastName,
+  streetAddress1,
+  streetAddress2,
+  townCity,
+  county,
+  postalCode,
+  country,
+}) =>
+  normalizeText(
+    [
+      [firstName, lastName].filter(Boolean).join(" ").trim(),
+      streetAddress1,
+      streetAddress2,
+      townCity,
+      county,
+      postalCode,
+      country,
+    ]
+      .map((value) => normalizeText(value, 255))
+      .filter(Boolean)
+      .join(", "),
+    1000
+  );
+
+const normalizeOrderAddress = (address, fallbackCustomer = {}) => {
+  if (!address || typeof address !== "object") return null;
+
+  const hasRawAddressSignals = Boolean(
+    address?.id ||
+      address?.shopifyId ||
+      address?.shopify_id ||
+      address?.customer_address_id ||
+      address?.address1 ||
+      address?.streetAddress1 ||
+      address?.street_address_1 ||
+      address?.address2 ||
+      address?.streetAddress2 ||
+      address?.street_address_2 ||
+      address?.city ||
+      address?.townCity ||
+      address?.town_city ||
+      address?.province ||
+      address?.province_code ||
+      address?.county ||
+      address?.zip ||
+      address?.postalCode ||
+      address?.postal_code ||
+      address?.country ||
+      address?.country_code ||
+      address?.phone
+  );
+  if (!hasRawAddressSignals) return null;
+
+  const normalized = {
+    shopifyId: normalizeAddressId(
+      address?.shopifyId ??
+        address?.shopify_id ??
+        address?.id ??
+        address?.customer_address_id
+    ),
+    firstName: normalizeName(
+      address?.firstName ??
+        address?.first_name ??
+        fallbackCustomer?.first_name ??
+        fallbackCustomer?.firstName
+    ),
+    lastName: normalizeName(
+      address?.lastName ??
+        address?.last_name ??
+        fallbackCustomer?.last_name ??
+        fallbackCustomer?.lastName
+    ),
+    streetAddress1: normalizeText(
+      address?.streetAddress1 ?? address?.street_address_1 ?? address?.address1,
+      255
+    ),
+    streetAddress2: normalizeText(
+      address?.streetAddress2 ?? address?.street_address_2 ?? address?.address2,
+      255
+    ),
+    townCity: normalizeText(address?.townCity ?? address?.town_city ?? address?.city, 255),
+    county: normalizeText(
+      address?.county ?? address?.province ?? address?.province_code,
+      255
+    ),
+    postalCode: normalizeText(address?.postalCode ?? address?.postal_code ?? address?.zip, 120),
+    country: normalizeText(address?.country ?? address?.country_code, 255),
+    phone: normalizePhone(address?.phone ?? fallbackCustomer?.phone),
+  };
+
+  normalized.fullAddress =
+    normalizeText(address?.fullAddress ?? address?.full_address, 1000) ||
+    buildFullAddress(normalized);
+
+  const hasMeaningfulAddress = Boolean(
+    normalized.shopifyId ||
+      normalized.fullAddress ||
+      normalized.phone
+  );
+
+  return hasMeaningfulAddress ? normalized : null;
 };
 
 const parseJsonField = (value) => {
@@ -291,10 +426,10 @@ const buildOrderSnapshotFields = (savedConfigRecord) => {
       fields[STUDIO_FIELDS.savedConfigurations.displayName],
       255
     ) || undefined,
-    [STUDIO_FIELDS.orders.creationSource]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.creationSource],
-      255
-    ) || undefined,
+    [STUDIO_FIELDS.orders.creationSource]:
+      normalizeOrderCreationSource(
+        fields[STUDIO_FIELDS.savedConfigurations.creationSource]
+      ) || undefined,
   };
 };
 
@@ -377,6 +512,8 @@ export const normalizeOrderWebhookPayload = (payload, envelope = {}) => {
         ),
         phone: normalizePhone(customer?.phone ?? billing?.phone ?? shipping?.phone),
       },
+      billing_address: normalizeOrderAddress(billing, customer),
+      shipping_address: normalizeOrderAddress(shipping, customer),
       line_items: normalizedLineItems,
     },
   };
@@ -471,13 +608,14 @@ export const upsertCanonicalCustomer = async ({
   lastName,
   phone,
   shopDomain,
-  creationSource = "Shopify webhook",
+  creationSource = null,
 }) => {
   const normalizedShopifyId = normalizeShopifyCustomerId(shopifyId);
   const normalizedEmail = normalizeEmail(email);
   const normalizedFirstName = normalizeName(firstName);
   const normalizedLastName = normalizeName(lastName);
   const normalizedPhone = normalizePhone(phone);
+  const normalizedCreationSource = normalizeCustomerCreationSource(creationSource);
 
   if (!normalizedShopifyId && !normalizedEmail) {
     return {
@@ -513,7 +651,7 @@ export const upsertCanonicalCustomer = async ({
     Phone: normalizedPhone || undefined,
     Source: "Shopify",
     "Shop Domain": normalizeText(shopDomain, 255) || undefined,
-    "Creation Source": normalizeText(creationSource, 255) || undefined,
+    "Creation Source": normalizedCreationSource || undefined,
   };
 
   if (existing?.id) {
@@ -544,6 +682,12 @@ export const upsertCanonicalCustomer = async ({
     const normalizedShopDomain = normalizeText(shopDomain, 255);
     if (normalizedShopDomain && currentFields["Shop Domain"] !== normalizedShopDomain) {
       updates["Shop Domain"] = normalizedShopDomain;
+    }
+    if (
+      normalizedCreationSource &&
+      currentFields["Creation Source"] !== normalizedCreationSource
+    ) {
+      updates["Creation Source"] = normalizedCreationSource;
     }
 
     const updated =
@@ -739,6 +883,85 @@ export const mergeGuestCustomersIntoCanonical = async ({
   };
 };
 
+const listAddressesByLinkedOrder = async (orderRecordId) => {
+  const orderId = normalizeRecordId(orderRecordId);
+  if (!orderId) return [];
+
+  try {
+    const rows = await listAllRecords(STUDIO_TABLES.addresses, {
+      filterByFormula: `FIND('${escapeFormulaValue(orderId)}', ARRAYJOIN({${STUDIO_FIELDS.addresses.orders}}))`,
+      maxRecords: 5,
+    });
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+};
+
+export const upsertBillingAddressForOrder = async ({
+  order = {},
+  customerRecordIds = [],
+  orderRecordId,
+}) => {
+  const normalizedOrderRecordId = normalizeRecordId(orderRecordId);
+  const linkedCustomerIds = uniqueRecordIds(customerRecordIds);
+  const billingAddress =
+    normalizeOrderAddress(order?.billing_address, order?.customer) ||
+    normalizeOrderAddress(order?.shipping_address, order?.customer);
+
+  if (!billingAddress) return null;
+
+  let existingAddress = null;
+  if (billingAddress.shopifyId) {
+    existingAddress = await findOneBy(
+      STUDIO_TABLES.addresses,
+      STUDIO_FIELDS.addresses.shopifyId,
+      billingAddress.shopifyId
+    );
+  }
+
+  if (!existingAddress?.id && normalizedOrderRecordId) {
+    const linkedOrderMatches = await listAddressesByLinkedOrder(normalizedOrderRecordId);
+    existingAddress = linkedOrderMatches[0] || null;
+  }
+
+  const existingCustomerIds = getLinkedIds(
+    existingAddress,
+    STUDIO_FIELDS.addresses.customer
+  );
+  const existingOrderIds = getLinkedIds(existingAddress, STUDIO_FIELDS.addresses.orders);
+
+  const fields = {
+    [STUDIO_FIELDS.addresses.fullAddress]: billingAddress.fullAddress || undefined,
+    [STUDIO_FIELDS.addresses.customer]:
+      uniqueLinkedRecordIds(existingCustomerIds, linkedCustomerIds).length > 0
+        ? uniqueLinkedRecordIds(existingCustomerIds, linkedCustomerIds)
+        : undefined,
+    [STUDIO_FIELDS.addresses.orders]:
+      uniqueLinkedRecordIds(existingOrderIds, normalizedOrderRecordId).length > 0
+        ? uniqueLinkedRecordIds(existingOrderIds, normalizedOrderRecordId)
+        : undefined,
+    [STUDIO_FIELDS.addresses.firstName]: billingAddress.firstName || undefined,
+    [STUDIO_FIELDS.addresses.lastName]: billingAddress.lastName || undefined,
+    [STUDIO_FIELDS.addresses.shopifyId]: billingAddress.shopifyId || undefined,
+    [STUDIO_FIELDS.addresses.streetAddress1]:
+      billingAddress.streetAddress1 || undefined,
+    [STUDIO_FIELDS.addresses.streetAddress2]:
+      billingAddress.streetAddress2 || undefined,
+    [STUDIO_FIELDS.addresses.townCity]: billingAddress.townCity || undefined,
+    [STUDIO_FIELDS.addresses.county]: billingAddress.county || undefined,
+    [STUDIO_FIELDS.addresses.postalCode]: billingAddress.postalCode || undefined,
+    [STUDIO_FIELDS.addresses.country]: billingAddress.country || undefined,
+    [STUDIO_FIELDS.addresses.phone]: billingAddress.phone || undefined,
+  };
+
+  if (existingAddress?.id) {
+    return updateResilient(STUDIO_TABLES.addresses, existingAddress.id, {}, fields);
+  }
+
+  return createResilient(STUDIO_TABLES.addresses, {}, fields);
+};
+
 const ensureSavedConfigSignalsEntry = (map, savedConfigurationRecordId) => {
   const key = normalizeRecordId(savedConfigurationRecordId);
   if (!key) return null;
@@ -912,7 +1135,7 @@ export const ensureSavedConfigurationOrderLinkage = async ({
   savedConfigurationRecordId,
   canonicalCustomerRecordId,
   orderRecordId,
-  orderStatus = "Order Received",
+  orderStatus = "Ordered",
   preferredFrontVersionId,
   preferredBackVersionId,
 }) => {
@@ -951,6 +1174,8 @@ export const ensureSavedConfigurationOrderLinkage = async ({
     savedConfigRecord,
     STUDIO_FIELDS.savedConfigurations.labelVersions
   );
+  const normalizedSavedConfigurationStatus =
+    normalizeSavedConfigurationStatusFromOrderStatus(orderStatus) || "Ordered";
 
   const mergedVersionIds = new Set(existingVersionIds);
   const frontVersionId = normalizeRecordId(preferredFrontVersionId);
@@ -967,10 +1192,15 @@ export const ensureSavedConfigurationOrderLinkage = async ({
           [STUDIO_FIELDS.savedConfigurations.customer]: effectiveCustomerIds,
         }
       : {}),
-    [STUDIO_FIELDS.savedConfigurations.status]: orderStatus,
-    [STUDIO_FIELDS.savedConfigurations.order]: normalizeRecordId(orderRecordId)
-      ? [normalizeRecordId(orderRecordId)]
-      : undefined,
+    [STUDIO_FIELDS.savedConfigurations.status]: normalizedSavedConfigurationStatus,
+    ...buildLinkedPatch(
+      savedConfigRecord,
+      STUDIO_FIELDS.savedConfigurations.order,
+      normalizeRecordId(orderRecordId),
+      {
+        fallbackFieldNames: STUDIO_FIELD_FALLBACKS.savedConfigurations.order,
+      }
+    ),
     [STUDIO_FIELDS.savedConfigurations.labelVersions]: uniqueRecordIds(
       Array.from(mergedVersionIds)
     ),
@@ -1028,6 +1258,7 @@ export const createOrderRecordForSavedConfiguration = async ({
 
   const linkedCustomerIds = uniqueRecordIds(customerRecordIds);
   const normalizedOrderId = normalizeText(orderId, 255);
+  const normalizedOrderStatus = normalizeOrderStatus(orderStatus) || "Ordered";
   const safeSavedConfigId = escapeFormulaValue(savedConfigId);
 
   const formulaParts = [
@@ -1050,8 +1281,7 @@ export const createOrderRecordForSavedConfiguration = async ({
     [STUDIO_FIELDS.orders.customer]:
       linkedCustomerIds.length > 0 ? linkedCustomerIds : undefined,
     [STUDIO_FIELDS.orders.savedConfiguration]: [savedConfigId],
-    [STUDIO_FIELDS.orders.orderStatus]:
-      normalizeText(orderStatus, 120) || "Order Received",
+    [STUDIO_FIELDS.orders.orderStatus]: normalizedOrderStatus,
     ...buildOrderSnapshotFields(savedConfigRecord),
   };
 

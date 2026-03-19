@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 process.env.AIRTABLE_BASE_ID = "appTestBase";
 process.env.AIRTABLE_TOKEN = "patTestToken";
 process.env.AIRTABLE_CUSTOMERS_TABLE_ID = "Customers";
-process.env.AIRTABLE_ORDERS_TABLE_ID = "Orders & Fulfilment";
+process.env.AIRTABLE_ORDERS_FULFILLMENT_TABLE_ID = "Orders & Fulfilment";
 
 const { default: createOrder } = await import(
   "../netlify/functions/create-order.js"
@@ -113,7 +113,7 @@ test("create-order writes Orders & Fulfilment schema fields only", async () => {
         assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
           "recSavedConfigurationA",
         ]);
-        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Order Received");
+        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Ordered");
         assert.deepEqual(fields[STUDIO_FIELDS.orders.addresses], [
           "recAddressA",
           "recAddressB",

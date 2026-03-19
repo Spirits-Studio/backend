@@ -10,18 +10,41 @@ import {
 
 export const STUDIO_TABLES = {
   customers: process.env.AIRTABLE_CUSTOMERS_TABLE_ID || "Customers",
+  addresses:
+    process.env.AIRTABLE_ADDRESSES_TABLE_ID ||
+    process.env.AIRTABLE_ADDRESSES_TABLE ||
+    "Addresses",
   savedConfigurations:
     process.env.AIRTABLE_SAVED_CONFIGS_TABLE_ID || "Saved Configurations",
   labels: process.env.AIRTABLE_LABELS_TABLE_ID || "Labels",
   labelVersions:
     process.env.AIRTABLE_LABEL_VERSIONS_TABLE_ID || "Label Versions",
   orders:
-    process.env.AIRTABLE_ORDERS_TABLE_ID ||
+    process.env.AIRTABLE_ORDERS_FULFILLMENT_TABLE_ID ||
     process.env.AIRTABLE_ORDERS_TABLE ||
     "Orders & Fulfilment",
 };
 
 export const STUDIO_FIELDS = {
+  customers: {
+    orders: "Orders & Fulfilment",
+    addresses: "Addresses",
+  },
+  addresses: {
+    fullAddress: "Full Address",
+    customer: "Customer",
+    orders: "Orders & Fulfilment",
+    firstName: "First Name",
+    lastName: "Last Name",
+    shopifyId: "Shopify ID",
+    streetAddress1: "Street Address 1",
+    streetAddress2: "Street Address 2",
+    townCity: "Town / City",
+    county: "County",
+    postalCode: "Postal Code",
+    country: "Country",
+    phone: "Phone",
+  },
   savedConfigurations: {
     configurationId: "Configuration ID",
     alcoholSelection: "Alcohol Selection",
@@ -42,7 +65,7 @@ export const STUDIO_FIELDS = {
     previewImageUrl: "Preview Image URL",
     currentFrontLabelOutputImageUrl:
       "Output Image URL (from Current Front Label Versions)",
-    order: "Order",
+    order: "Orders & Fulfilment",
     status: "Status",
     sessionId: "Session ID",
     shopifyVariantId: "Shopify Variant ID",
@@ -108,9 +131,34 @@ export const STUDIO_FIELDS = {
   },
 };
 
+export const STUDIO_SINGLE_SELECT_OPTIONS = {
+  customers: {
+    source: ["Shopify", "Direct", "Lead"],
+    creationSource: [
+      "Not Logged-in Shopify -> Netlify Backend (create-airtable-customer)",
+      "Logged-in Shopify -> Netlify Backend (create-airtable-customer)",
+    ],
+  },
+  savedConfigurations: {
+    status: ["Saved", "Ordered", "Archived"],
+    creationSource: [
+      "Shopify -> Netlify Backend (save-airtable-configuration)",
+      "Shopify -> Netlify Backend (studio-save-configuration)",
+    ],
+  },
+  orders: {
+    orderStatus: ["Ordered", "Cancelled"],
+    creationSource: [
+      "Shopify -> Netlify Backend (save-airtable-configuration)",
+      "Shopify -> Netlify Backend (studio-save-configuration)",
+    ],
+  },
+};
+
 // Canonical-first fallback names for in-flight Airtable schema migration.
 export const STUDIO_FIELD_FALLBACKS = {
   savedConfigurations: {
+    order: ["Order"],
     currentFrontLabelVersion: ["Current Front Label Version"],
     currentBackLabelVersion: ["Current Back Label Version"],
   },
@@ -199,6 +247,33 @@ export const normalizeStatus = (value) => {
   if (raw === "saved") return "Saved";
   if (raw === "ordered") return "Ordered";
   if (raw === "archived") return "Archived";
+  return null;
+};
+
+export const normalizeSingleSelectOption = (value, allowedOptions = []) => {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return allowedOptions.includes(raw) ? raw : null;
+};
+
+export const normalizeOrderStatus = (value) => {
+  const raw = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return null;
+  if (raw === "ordered" || raw === "paid" || raw === "order received") {
+    return "Ordered";
+  }
+  if (raw === "cancelled" || raw === "canceled") {
+    return "Cancelled";
+  }
+  return null;
+};
+
+export const normalizeSavedConfigurationStatusFromOrderStatus = (value) => {
+  const orderStatus = normalizeOrderStatus(value);
+  if (orderStatus === "Ordered") return "Ordered";
+  if (orderStatus === "Cancelled") return "Archived";
   return null;
 };
 
