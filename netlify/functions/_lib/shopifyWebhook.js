@@ -49,6 +49,11 @@ const webhookLogDefaults = {
   error: null,
 };
 
+const debugFlagEnabled = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase() === "true";
+
 const toPlainHeaderValue = (value) => {
   if (Array.isArray(value)) return String(value[0] ?? "").trim();
   return String(value ?? "").trim();
@@ -164,6 +169,57 @@ export const verifyWebhookHmac = ({
   if (!expected.length || expected.length !== provided.length) return false;
 
   return crypto.timingSafeEqual(expected, provided);
+};
+
+export const shouldLogWebhookVerificationDebug = () =>
+  debugFlagEnabled(process.env.SHOPIFY_WEBHOOK_DEBUG);
+
+const redactValue = (value, { prefix = 12, suffix = 6 } = {}) => {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  if (text.length <= prefix + suffix) return text;
+  return `${text.slice(0, prefix)}...${text.slice(-suffix)}`;
+};
+
+const fingerprintSecret = (secret) => {
+  const text = String(secret || "");
+  if (!text) return null;
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex").slice(0, 16);
+};
+
+export const createWebhookVerificationDebugInfo = ({
+  rawBody,
+  headers,
+  providedHmac,
+  secret = process.env.SHOPIFY_WEBHOOK_SECRET,
+}) => {
+  const normalizedHeaders = normalizeWebhookHeaders(headers || {});
+  const bodyText = String(rawBody || "");
+  const computedHmac = secret
+    ? crypto.createHmac("sha256", secret).update(bodyText, "utf8").digest("base64")
+    : null;
+
+  return {
+    verification_debug: {
+      enabled: true,
+      has_secret: Boolean(secret),
+      secret_fingerprint: fingerprintSecret(secret),
+      raw_body_bytes: Buffer.byteLength(bodyText, "utf8"),
+      raw_body_sha256: hashWebhookPayload(bodyText),
+      provided_hmac: redactValue(providedHmac),
+      computed_hmac: redactValue(computedHmac),
+      provided_hmac_length: String(providedHmac || "").length || 0,
+      computed_hmac_length: String(computedHmac || "").length || 0,
+      topic_header: normalizedHeaders[SHOPIFY_WEBHOOK_HEADERS.topic] || null,
+      shop_domain_header:
+        normalizedHeaders[SHOPIFY_WEBHOOK_HEADERS.shopDomain] || null,
+      webhook_id_header:
+        normalizedHeaders[SHOPIFY_WEBHOOK_HEADERS.webhookId] || null,
+      content_type: normalizedHeaders["content-type"] || null,
+      user_agent: normalizedHeaders["user-agent"] || null,
+      header_keys: Object.keys(normalizedHeaders).sort(),
+    },
+  };
 };
 
 export const hashWebhookPayload = (rawBody) =>

@@ -7,6 +7,8 @@ import {
   createWebhookLogContext,
   createWebhookLogger,
   mapWebhookErrorMessage,
+  shouldLogWebhookVerificationDebug,
+  createWebhookVerificationDebugInfo,
   sendWebhookJson,
   sendWebhookText,
 } from "./shopifyWebhook.js";
@@ -63,6 +65,13 @@ export const createShopifyWebhookCustomersHandler = ({
       logger.warn("invalid hmac", {
         status: "error",
         error: "invalid_hmac",
+        ...(shouldLogWebhookVerificationDebug()
+          ? createWebhookVerificationDebugInfo({
+              rawBody: envelope.rawBody,
+              headers: envelope.headers,
+              providedHmac: envelope.hmac,
+            })
+          : {}),
       });
       return sendText(401, "invalid hmac");
     }

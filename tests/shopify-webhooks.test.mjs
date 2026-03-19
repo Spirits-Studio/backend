@@ -24,6 +24,9 @@ const { default: shopifyWebhookCustomersCreate } = await import(
 const { default: shopifyWebhookCustomersUpdate } = await import(
   "../netlify/functions/shopify-webhook-customers-update.js"
 );
+const { createWebhookVerificationDebugInfo } = await import(
+  "../netlify/functions/_lib/shopifyWebhook.js"
+);
 const { mergeGuestCustomersIntoCanonical } = await import(
   "../netlify/functions/_lib/shopifyWebhookStudio.js"
 );
@@ -198,6 +201,35 @@ const parseNetlifyResponseBody = (response) => {
   if (!response || typeof response.body !== "string" || !response.body) return null;
   return JSON.parse(response.body);
 };
+
+test("webhook verification debug info redacts secrets and hmacs", () => {
+  const info = createWebhookVerificationDebugInfo({
+    rawBody: JSON.stringify({ id: 123, email: "debug@example.com" }),
+    headers: {
+      "content-type": "application/json",
+      "user-agent": "Shopify-Captain-Hook",
+      "x-shopify-topic": "orders/paid",
+      "x-shopify-shop-domain": "wnbrmm-sg.myshopify.com",
+      "x-shopify-webhook-id": "wh_debug_1",
+    },
+    providedHmac: "abcdefghijklmnopqrstuvwxyz0123456789",
+    secret: "super-secret-value",
+  });
+
+  assert.equal(info.verification_debug.enabled, true);
+  assert.equal(info.verification_debug.has_secret, true);
+  assert.notEqual(info.verification_debug.secret_fingerprint, "super-secret-value");
+  assert.equal(
+    info.verification_debug.provided_hmac,
+    "abcdefghijkl...456789"
+  );
+  assert.ok(info.verification_debug.raw_body_sha256);
+  assert.equal(info.verification_debug.topic_header, "orders/paid");
+  assert.equal(
+    info.verification_debug.shop_domain_header,
+    "wnbrmm-sg.myshopify.com"
+  );
+});
 
 test("duplicate webhook delivery is idempotently skipped", async () => {
   const fetchMock = installFetchSequence([
@@ -433,6 +465,112 @@ test("orders/paid webhook returns a Web Response for Request-based invocations",
     });
 
     const response = await shopifyWebhookOrdersPaid(request);
+    assert.ok(response instanceof Response);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "application/json");
+
+    const body = await response.json();
+    assert.equal(body?.ok, true);
+    assert.equal(body?.idempotent_skip, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("customers/create webhook returns a Web Response for Request-based invocations", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Webhook ID}='wh_event_customers_create_v2_1')");
+      },
+      response: {
+        records: [
+          { id: "recWebhookEventCustomersCreateV2", fields: { Status: "processed" } },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookEventCustomersCreateV2",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "skipped");
+      },
+      response: {
+        records: [{ id: "recWebhookEventCustomersCreateV2", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const request = createWebhookRequestV2({
+      topic: "customers/create",
+      webhookId: "wh_event_customers_create_v2_1",
+      payload: {
+        id: 503,
+        email: "customer-create-v2@example.com",
+      },
+    });
+
+    const response = await shopifyWebhookCustomersCreate(request);
+    assert.ok(response instanceof Response);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "application/json");
+
+    const body = await response.json();
+    assert.equal(body?.ok, true);
+    assert.equal(body?.idempotent_skip, true);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("customers/update webhook returns a Web Response for Request-based invocations", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "({Webhook ID}='wh_event_customers_update_v2_1')");
+      },
+      response: {
+        records: [
+          { id: "recWebhookEventCustomersUpdateV2", fields: { Status: "processed" } },
+        ],
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookEventCustomersUpdateV2",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "skipped");
+      },
+      response: {
+        records: [{ id: "recWebhookEventCustomersUpdateV2", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const request = createWebhookRequestV2({
+      topic: "customers/update",
+      webhookId: "wh_event_customers_update_v2_1",
+      payload: {
+        id: 504,
+        email: "customer-update-v2@example.com",
+      },
+    });
+
+    const response = await shopifyWebhookCustomersUpdate(request);
     assert.ok(response instanceof Response);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-type"), "application/json");
