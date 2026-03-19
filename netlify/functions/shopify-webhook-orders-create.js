@@ -205,6 +205,7 @@ export const createShopifyWebhookOrdersHandler = ({
           orderId: toOrderIdString(order?.id),
           orderStatus,
           savedConfigurationRecordId,
+          savedConfigurationRecord: savedConfigRecord,
           customerRecordIds: linkedCustomerIds,
         });
 

@@ -3,14 +3,18 @@ import {
   STUDIO_TABLES,
   STUDIO_FIELDS,
   STUDIO_FIELD_FALLBACKS,
+  firstNonEmpty,
   normalizeRecordId,
   getLinkedIds,
+  getFieldValue,
   buildLinkedPatch,
   createResilient,
   updateResilient,
   getRecordOrNull,
   listAllRecords,
   buildLinkedCustomerFormula,
+  sanitizeText,
+  sanitizeUrl,
   toLinkedRecordArray,
 } from "./studio.js";
 
@@ -98,6 +102,200 @@ const uniqueTextValues = (values = [], maxLen = 255) => {
     if (text && !out.includes(text)) out.push(text);
   }
   return out;
+};
+
+const parseJsonField = (value) => {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+const firstTextValue = (value, maxLen = 255) => {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const text = normalizeText(entry, maxLen);
+      if (text) return text;
+    }
+    return null;
+  }
+  return normalizeText(value, maxLen);
+};
+
+const firstAttachmentUrl = (value) => {
+  if (!Array.isArray(value)) return null;
+  for (const entry of value) {
+    const url = sanitizeUrl(
+      entry?.url || entry?.thumbnails?.large?.url || entry?.thumbnails?.full?.url
+    );
+    if (url) return url;
+  }
+  return null;
+};
+
+const toAttachmentFieldFromUrl = (value) => {
+  const url = sanitizeUrl(value);
+  return url ? [{ url }] : undefined;
+};
+
+const readSelectedLabelVersionUrl = (selectedLabelVersion) =>
+  sanitizeUrl(
+    firstNonEmpty(
+      selectedLabelVersion?.outputImageUrl,
+      selectedLabelVersion?.output_image_url,
+      selectedLabelVersion?.outputS3Url,
+      selectedLabelVersion?.output_s3_url
+    )
+  ) || null;
+
+const getFrontLabelUrlFromSnapshot = (snapshot) => {
+  if (!snapshot || typeof snapshot !== "object") return null;
+
+  const directUrl = sanitizeUrl(
+    firstNonEmpty(
+      snapshot.front_label_url,
+      snapshot.frontLabelUrl,
+      snapshot.front_image_url,
+      snapshot.frontImageUrl
+    )
+  );
+  if (directUrl) return directUrl;
+
+  const selectedSide = normalizeSide(
+    firstNonEmpty(
+      snapshot?.selectedLabelVersion?.designSide,
+      snapshot?.selectedLabelVersion?.design_side
+    )
+  );
+  if (!selectedSide || selectedSide === "front") {
+    const selectedUrl = readSelectedLabelVersionUrl(snapshot?.selectedLabelVersion);
+    if (selectedUrl) return selectedUrl;
+  }
+
+  const frontVersionLikeCandidates = [
+    snapshot?.front,
+    snapshot?.front_label,
+    snapshot?.frontLabel,
+    snapshot?.labels?.front,
+    snapshot?.labelVersions?.front,
+    snapshot?.selectedFrontLabelVersion,
+    snapshot?.selected_front_label_version,
+  ];
+
+  for (const candidate of frontVersionLikeCandidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const nestedUrl =
+      readSelectedLabelVersionUrl(candidate?.selectedLabelVersion) ||
+      readSelectedLabelVersionUrl(candidate);
+    if (nestedUrl) return nestedUrl;
+  }
+
+  return null;
+};
+
+const buildOrderSnapshotFields = (savedConfigRecord) => {
+  const fields = savedConfigRecord?.fields || {};
+  const configJson = sanitizeText(
+    getFieldValue(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.configJson),
+    100_000
+  );
+  const configSnapshot = parseJsonField(configJson);
+
+  const previewImageUrl =
+    sanitizeUrl(
+      firstTextValue(
+        getFieldValue(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.previewImageUrl),
+        2048
+      )
+    ) ||
+    firstAttachmentUrl(
+      getFieldValue(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.previewImage)
+    ) ||
+    sanitizeUrl(
+      firstNonEmpty(
+        configSnapshot?.preview_url,
+        configSnapshot?.previewUrl,
+        configSnapshot?.previewImage,
+        configSnapshot?.preview
+      )
+    ) ||
+    null;
+
+  const frontLabelUrl =
+    sanitizeUrl(
+      firstTextValue(
+        getFieldValue(
+          savedConfigRecord,
+          STUDIO_FIELDS.savedConfigurations.currentFrontLabelOutputImageUrl
+        ),
+        2048
+      )
+    ) ||
+    getFrontLabelUrlFromSnapshot(configSnapshot) ||
+    null;
+
+  return {
+    [STUDIO_FIELDS.orders.configurationId]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.configurationId],
+      80
+    ) || undefined,
+    [STUDIO_FIELDS.orders.sessionId]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.sessionId],
+      255
+    ) || undefined,
+    [STUDIO_FIELDS.orders.configuratorTool]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.configuratorTool],
+      120
+    ) || undefined,
+    [STUDIO_FIELDS.orders.alcoholSelection]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.alcoholSelection],
+      120
+    ) || undefined,
+    [STUDIO_FIELDS.orders.bottleSelection]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.bottleSelection],
+      120
+    ) || undefined,
+    [STUDIO_FIELDS.orders.liquidSelection]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.liquidSelection],
+      120
+    ) || undefined,
+    [STUDIO_FIELDS.orders.closureSelection]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.closureSelection],
+      120
+    ) || undefined,
+    [STUDIO_FIELDS.orders.waxSelection]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.waxSelection],
+      120
+    ) || undefined,
+    [STUDIO_FIELDS.orders.internalSku]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.internalSku],
+      255
+    ) || undefined,
+    [STUDIO_FIELDS.orders.shopifyProductId]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.shopifyProductId],
+      255
+    ) || undefined,
+    [STUDIO_FIELDS.orders.shopifyVariantId]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.shopifyVariantId],
+      255
+    ) || undefined,
+    [STUDIO_FIELDS.orders.configJson]: configJson || undefined,
+    [STUDIO_FIELDS.orders.frontLabelUrl]: frontLabelUrl || undefined,
+    [STUDIO_FIELDS.orders.frontLabel]: toAttachmentFieldFromUrl(frontLabelUrl),
+    [STUDIO_FIELDS.orders.previewImageUrl]: previewImageUrl || undefined,
+    [STUDIO_FIELDS.orders.previewImage]: toAttachmentFieldFromUrl(previewImageUrl),
+    [STUDIO_FIELDS.orders.displayName]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.displayName],
+      255
+    ) || undefined,
+    [STUDIO_FIELDS.orders.creationSource]: normalizeText(
+      fields[STUDIO_FIELDS.savedConfigurations.creationSource],
+      255
+    ) || undefined,
+  };
 };
 
 export const normalizeOrderWebhookPayload = (payload, envelope = {}) => {
@@ -816,10 +1014,17 @@ export const createOrderRecordForSavedConfiguration = async ({
   orderId,
   orderStatus,
   savedConfigurationRecordId,
+  savedConfigurationRecord = null,
   customerRecordIds = [],
 }) => {
   const savedConfigId = normalizeRecordId(savedConfigurationRecordId);
   if (!savedConfigId) return null;
+
+  const savedConfigRecord =
+    savedConfigurationRecord && savedConfigurationRecord.id === savedConfigId
+      ? savedConfigurationRecord
+      : await getRecordOrNull(STUDIO_TABLES.savedConfigurations, savedConfigId);
+  if (!savedConfigRecord?.id) return null;
 
   const linkedCustomerIds = uniqueRecordIds(customerRecordIds);
   const normalizedOrderId = normalizeText(orderId, 255);
@@ -847,6 +1052,7 @@ export const createOrderRecordForSavedConfiguration = async ({
     [STUDIO_FIELDS.orders.savedConfiguration]: [savedConfigId],
     [STUDIO_FIELDS.orders.orderStatus]:
       normalizeText(orderStatus, 120) || "Order Received",
+    ...buildOrderSnapshotFields(savedConfigRecord),
   };
 
   const existingOrderRecord = Array.isArray(existingOrderRecords)

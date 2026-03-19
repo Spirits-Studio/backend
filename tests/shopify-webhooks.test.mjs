@@ -672,10 +672,135 @@ test("order record helper updates existing order for the same order id and saved
       orderId: "7786446422362",
       orderStatus: "Paid",
       savedConfigurationRecordId: "recSavedConfigA",
+      savedConfigurationRecord: {
+        id: "recSavedConfigA",
+        fields: {},
+      },
       customerRecordIds: ["recCanonicalCustomer"],
     });
 
     assert.equal(record?.id, "recExistingOrderA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("order record helper copies saved configuration snapshot fields into Orders & Fulfilment", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Orders & Fulfilment",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(
+          formula,
+          "AND({Order ID}='7786446422999',FIND('recSavedConfigSnapshot', ARRAYJOIN({Saved Configuration})))"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Orders & Fulfilment",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.orders.orderId], "7786446422999");
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], [
+          "recCanonicalCustomer",
+        ]);
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
+          "recSavedConfigSnapshot",
+        ]);
+        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Paid");
+        assert.equal(fields[STUDIO_FIELDS.orders.configurationId], "cfg_123");
+        assert.equal(fields[STUDIO_FIELDS.orders.sessionId], "session-123");
+        assert.equal(fields[STUDIO_FIELDS.orders.configuratorTool], "Build Your Rum Brand");
+        assert.equal(fields[STUDIO_FIELDS.orders.alcoholSelection], "Rum");
+        assert.equal(fields[STUDIO_FIELDS.orders.bottleSelection], "Origin");
+        assert.equal(fields[STUDIO_FIELDS.orders.liquidSelection], "White Rum");
+        assert.equal(fields[STUDIO_FIELDS.orders.closureSelection], "Wooden Cork");
+        assert.equal(fields[STUDIO_FIELDS.orders.waxSelection], "Black");
+        assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-123");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10243100311898");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "445566778899");
+        assert.equal(
+          fields[STUDIO_FIELDS.orders.configJson],
+          JSON.stringify({
+            preview_url: "https://cdn.example.com/preview-image.png",
+            selectedLabelVersion: {
+              designSide: "front",
+              outputImageUrl: "https://cdn.example.com/front-label-fallback.png",
+            },
+          })
+        );
+        assert.equal(
+          fields[STUDIO_FIELDS.orders.frontLabelUrl],
+          "https://cdn.example.com/front-label.png"
+        );
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.frontLabel], [
+          { url: "https://cdn.example.com/front-label.png" },
+        ]);
+        assert.equal(
+          fields[STUDIO_FIELDS.orders.previewImageUrl],
+          "https://cdn.example.com/preview-image.png"
+        );
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.previewImage], [
+          { url: "https://cdn.example.com/preview-image.png" },
+        ]);
+        assert.equal(fields[STUDIO_FIELDS.orders.displayName], "Marcus Rum");
+        assert.equal(
+          fields[STUDIO_FIELDS.orders.creationSource],
+          "Shopify -> Netlify Backend (studio-save-configuration)"
+        );
+      },
+      response: {
+        records: [{ id: "recOrderSnapshotA", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const record = await createOrderRecordForSavedConfiguration({
+      orderId: "7786446422999",
+      orderStatus: "Paid",
+      savedConfigurationRecordId: "recSavedConfigSnapshot",
+      savedConfigurationRecord: {
+        id: "recSavedConfigSnapshot",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.configurationId]: "cfg_123",
+          [STUDIO_FIELDS.savedConfigurations.sessionId]: "session-123",
+          [STUDIO_FIELDS.savedConfigurations.configuratorTool]:
+            "Build Your Rum Brand",
+          [STUDIO_FIELDS.savedConfigurations.alcoholSelection]: "Rum",
+          [STUDIO_FIELDS.savedConfigurations.bottleSelection]: "Origin",
+          [STUDIO_FIELDS.savedConfigurations.liquidSelection]: "White Rum",
+          [STUDIO_FIELDS.savedConfigurations.closureSelection]: "Wooden Cork",
+          [STUDIO_FIELDS.savedConfigurations.waxSelection]: "Black",
+          [STUDIO_FIELDS.savedConfigurations.internalSku]: "SKU-123",
+          [STUDIO_FIELDS.savedConfigurations.shopifyProductId]: "10243100311898",
+          [STUDIO_FIELDS.savedConfigurations.shopifyVariantId]: "445566778899",
+          [STUDIO_FIELDS.savedConfigurations.configJson]: JSON.stringify({
+            preview_url: "https://cdn.example.com/preview-image.png",
+            selectedLabelVersion: {
+              designSide: "front",
+              outputImageUrl: "https://cdn.example.com/front-label-fallback.png",
+            },
+          }),
+          [STUDIO_FIELDS.savedConfigurations.currentFrontLabelOutputImageUrl]: [
+            "https://cdn.example.com/front-label.png",
+          ],
+          [STUDIO_FIELDS.savedConfigurations.previewImageUrl]:
+            "https://cdn.example.com/preview-image.png",
+          [STUDIO_FIELDS.savedConfigurations.displayName]: "Marcus Rum",
+          [STUDIO_FIELDS.savedConfigurations.creationSource]:
+            "Shopify -> Netlify Backend (studio-save-configuration)",
+        },
+      },
+      customerRecordIds: ["recCanonicalCustomer"],
+    });
+
+    assert.equal(record?.id, "recOrderSnapshotA");
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
