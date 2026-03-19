@@ -333,41 +333,51 @@ test("inferred label path backfills session id from linked label when omitted", 
   );
 });
 
-test("rejects data-url input_logo_url blobs", async () => {
+test("persists label versions without storing input logo/character url fields", async () => {
+  const createCalls = [];
+
   const handler = createHandler({
-    parseBodyImpl: async () => ({
-      ...baseBody(),
-      input_logo_url: "data:image/png;base64,AAAABBBB",
-    }),
+    parseBodyImpl: async () => baseBody(),
     assertPayloadSizeImpl: () => {},
     sendJsonImpl: sendJsonForTests,
     getRecordOrNullImpl: async () => null,
-    createResilientImpl: async (table) => {
+    computeNextVersionNumberImpl: async () => 1,
+    createResilientImpl: async (table, requiredFields, optionalFields) => {
+      createCalls.push({ table, requiredFields, optionalFields });
       if (table === STUDIO_TABLES.labels) {
         return {
           id: "recLabelCreated",
           fields: {
             [STUDIO_FIELDS.labels.customers]: [CUSTOMER_ID],
+            [STUDIO_FIELDS.labels.labelVersions]: [],
           },
+          createdTime: "2026-02-26T00:00:00.000Z",
         };
       }
-      throw new Error("Version create should not be reached for invalid input refs.");
+      if (table === STUDIO_TABLES.labelVersions) {
+        return { id: "recVersionCreated", createdTime: "2026-02-26T01:00:00.000Z" };
+      }
+      throw new Error(`Unexpected create: ${table}`);
     },
+    updateResilientImpl: async (table, recordId) => ({ table, recordId }),
   });
 
   const result = await handler({}, { qs: {}, isV2: false, method: "POST" });
-  assert.equal(result.status, 400);
-  assert.equal(result.body.error, "invalid_input_logo_url");
+  assert.equal(result.status, 200);
+
+  const versionCreate = createCalls.find((c) => c.table === STUDIO_TABLES.labelVersions);
+  assert.ok(versionCreate, "Expected label version create call");
+  assert.equal(Object.hasOwn(versionCreate.optionalFields, "Input Logo URL"), false);
+  assert.equal(Object.hasOwn(versionCreate.optionalFields, "Input Character URL"), false);
 });
 
-test("persists valid input logo/character URL pointers", async () => {
+test("persists input_reference_url when provided for revision metadata", async () => {
   const createCalls = [];
 
   const handler = createHandler({
     parseBodyImpl: async () => ({
       ...baseBody(),
-      input_logo_url: "https://cdn.example.com/logo.png",
-      input_character_url: "https://cdn.example.com/character.png",
+      input_reference_url: "https://cdn.example.com/previous-label.png",
     }),
     assertPayloadSizeImpl: () => {},
     sendJsonImpl: sendJsonForTests,
@@ -399,12 +409,8 @@ test("persists valid input logo/character URL pointers", async () => {
   const versionCreate = createCalls.find((c) => c.table === STUDIO_TABLES.labelVersions);
   assert.ok(versionCreate, "Expected label version create call");
   assert.equal(
-    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.inputLogoUrl],
-    "https://cdn.example.com/logo.png"
-  );
-  assert.equal(
-    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.inputCharacterUrl],
-    "https://cdn.example.com/character.png"
+    versionCreate.optionalFields[STUDIO_FIELDS.labelVersions.inputReferenceUrl],
+    "https://cdn.example.com/previous-label.png"
   );
 });
 

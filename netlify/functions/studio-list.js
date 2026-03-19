@@ -306,10 +306,6 @@ export default withShopifyProxy(
                 edit_prompt_text:
                   versionFields[STUDIO_FIELDS.labelVersions.editPromptText] || null,
                 model_name: versionFields[STUDIO_FIELDS.labelVersions.modelName] || null,
-                input_character_url:
-                  versionFields[STUDIO_FIELDS.labelVersions.inputCharacterUrl] || null,
-                input_logo_url:
-                  versionFields[STUDIO_FIELDS.labelVersions.inputLogoUrl] || null,
                 input_reference_url:
                   versionFields[STUDIO_FIELDS.labelVersions.inputReferenceUrl] || null,
                 output_image_url:

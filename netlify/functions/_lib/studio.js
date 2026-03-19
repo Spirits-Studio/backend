@@ -61,8 +61,6 @@ export const STUDIO_FIELDS = {
     bottle: "Bottle",
     designSide: "Design Side",
     editPromptText: "Edit Prompt Text",
-    inputCharacterUrl: "Input Character URL",
-    inputLogoUrl: "Input Logo URL",
     inputReferenceUrl: "Input Reference URL",
     labels: "Labels",
     modelName: "Model Name",

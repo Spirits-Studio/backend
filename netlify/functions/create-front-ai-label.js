@@ -87,16 +87,6 @@ function pickDataUrl(obj, keys = []) {
   return '';
 }
 
-function pickHttpUrl(obj, keys = []) {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (typeof v !== "string") continue;
-    const trimmed = v.trim();
-    if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  }
-  return "";
-}
-
 function normalizeHex(hex = '') {
   const s = String(hex).trim();
   if (!s) return '';
@@ -122,22 +112,6 @@ function dataUrlToInlineData(dataUrl) {
     const mime = meta && meta.includes('/') ? meta : 'image/png';
     return { mimeType: mime, data: b64 };
   } catch { return null; }
-}
-
-async function urlToInlineData(url) {
-  try {
-    const href = String(url || "").trim();
-    if (!/^https?:\/\//i.test(href)) return null;
-    const res = await fetch(href);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const mime = res.headers.get("content-type") || "image/png";
-    const ab = await res.arrayBuffer();
-    if (!ab || !ab.byteLength) return null;
-    return { mimeType: mime, data: Buffer.from(ab).toString("base64") };
-  } catch (error) {
-    console.warn("urlToInlineData failed:", error?.message || error);
-    return null;
-  }
 }
 
 async function trimWhiteBorder(input, opts = {}) {
@@ -329,42 +303,21 @@ async function resolveInputAsset({
   body,
   qs,
   dataKeys = [],
-  urlKeys = [],
-  s3Prefix,
   assetName,
-  metadata = {},
 }) {
   const dataUrl = pickDataUrl(body, dataKeys) || pickDataUrl(qs, dataKeys);
-  const directUrl = pickHttpUrl(body, urlKeys) || pickHttpUrl(qs, urlKeys);
-
-  let inlineData = null;
-  let inputUrl = directUrl || "";
 
   if (dataUrl) {
-    inlineData = dataUrlToInlineData(dataUrl);
-    const { buffer, mimeType } = parseDataUrlToBuffer(dataUrl);
-    if (!inlineData || !buffer || !buffer.length) {
+    const inlineData = dataUrlToInlineData(dataUrl);
+    if (!inlineData || !inlineData.data) {
       const err = new Error(`${assetName} must be a valid data URL when provided.`);
       err.status = 400;
       throw err;
     }
-
-    const ext = mimeToExt(mimeType);
-    const key = `${s3Prefix}_${assetName}_${Date.now()}.${ext}`;
-    inputUrl = await uploadBufferToS3({
-      buffer,
-      contentType: mimeType || "application/octet-stream",
-      key,
-      metadata,
-    });
-    return { inlineData, inputUrl, hasDataUrl: true };
+    return { inlineData };
   }
 
-  if (directUrl) {
-    inlineData = await urlToInlineData(directUrl);
-  }
-
-  return { inlineData, inputUrl, hasDataUrl: false };
+  return { inlineData: null };
 }
 
 // --- Normalise bottle & side casing to match keys above ---
@@ -551,11 +504,9 @@ async function main(arg, { qs, method }) {
     const previousImage = body.previousImage ?? qs.previousImage ?? "";
     const previousImageIsDataUrl =
       typeof previousImage === "string" && previousImage.startsWith("data:");
-    const previousImageIsUrl =
-      typeof previousImage === "string" && /^https?:\/\//i.test(previousImage);
     const previousImageInline = previousImageIsDataUrl
       ? dataUrlToInlineData(previousImage)
-      : (previousImageIsUrl ? await urlToInlineData(previousImage) : null);
+      : null;
     const hasPreviousImage = Boolean(previousImageInline);
     const qsDebug = qs?.debug;
     debugOn = qsDebug === '1' || qsDebug === 'true' || body.debug === true;
@@ -568,14 +519,8 @@ async function main(arg, { qs, method }) {
     debugImages.length = 0;
 
     const logoDataUrl = pickDataUrl(body, ["logoDataUrl", "logo"]) || pickDataUrl(qs, ["logoDataUrl", "logo"]);
-    const logoUrlInput =
-      pickHttpUrl(body, ["logoUrl", "input_logo_url", "inputLogoUrl"]) ||
-      pickHttpUrl(qs, ["logoUrl", "input_logo_url", "inputLogoUrl"]);
     const characterDataUrl =
       pickDataUrl(body, ["characterDataUrl", "character"]) || pickDataUrl(qs, ["characterDataUrl", "character"]);
-    const characterUrlInput =
-      pickHttpUrl(body, ["characterUrl", "input_character_url", "inputCharacterUrl"]) ||
-      pickHttpUrl(qs, ["characterUrl", "input_character_url", "inputCharacterUrl"]);
 
     const bottleName = normaliseBottle(rawBottle);
     const dims = labelDimensions[bottleName] || null;
@@ -596,9 +541,7 @@ async function main(arg, { qs, method }) {
           primaryHex,
           secondaryHex,
           hasLogoDataUrl: Boolean(logoDataUrl),
-          hasLogoUrlInput: Boolean(logoUrlInput),
           hasCharacterDataUrl: Boolean(characterDataUrl),
-          hasCharacterUrlInput: Boolean(characterUrlInput),
           sessionId: sessionId ? String(sessionId).slice(0, 6) + '…' : '',
           hasCritique: Boolean(critique),
           hasPreviousImage,
@@ -623,53 +566,30 @@ async function main(arg, { qs, method }) {
       return {
         statusCode: 400,
         body: JSON.stringify({
-          message: "previousImage must be a valid data URL or publicly fetchable HTTP(S) URL"
+          message: "previousImage must be a valid inline data URL for revisions."
         }),
       };
     }
 
     let logoInline = null;
     let characterInline = null;
-    let inputLogoUrl = logoUrlInput || "";
-    let inputCharacterUrl = characterUrlInput || "";
     try {
-      const inputPrefix = `sessions/${sIdSafe}/${bottleSafe}/front_input`;
       const [logoAsset, characterAsset] = await Promise.all([
         resolveInputAsset({
           body,
           qs,
           dataKeys: ["logoDataUrl", "logo"],
-          urlKeys: ["logoUrl", "input_logo_url", "inputLogoUrl"],
-          s3Prefix: inputPrefix,
           assetName: "logo",
-          metadata: {
-            "ss-stage": "session",
-            "ss-design-side": "front",
-            "ss-bottle": bottleSafe,
-            "ss-source": "ai-input-logo",
-            "ss-session-id": sIdSafe,
-          },
         }),
         resolveInputAsset({
           body,
           qs,
           dataKeys: ["characterDataUrl", "character"],
-          urlKeys: ["characterUrl", "input_character_url", "inputCharacterUrl"],
-          s3Prefix: inputPrefix,
           assetName: "character",
-          metadata: {
-            "ss-stage": "session",
-            "ss-design-side": "front",
-            "ss-bottle": bottleSafe,
-            "ss-source": "ai-input-character",
-            "ss-session-id": sIdSafe,
-          },
         }),
       ]);
       logoInline = logoAsset.inlineData;
       characterInline = characterAsset.inlineData;
-      inputLogoUrl = logoAsset.inputUrl || "";
-      inputCharacterUrl = characterAsset.inputUrl || "";
     } catch (assetError) {
       return {
         statusCode: assetError?.status || 500,
@@ -866,8 +786,6 @@ async function main(arg, { qs, method }) {
         // S3 results
         s3Uploads: uploaded,
         frontS3Url,
-        inputLogoUrl,
-        inputCharacterUrl,
         modelMessage,
         ...(debugOn ? { debug: { enabled: true, imagesCaptured: debugImages.length } } : {}),
       };

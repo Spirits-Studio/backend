@@ -65,18 +65,6 @@ const parsePayloadInputs = (body = {}) => {
     ),
     120
   );
-  const rawInputCharacterRef = firstNonEmpty(
-    body.input_character_url,
-    body.inputCharacterUrl,
-    aiInput.characterUrl
-  );
-  const rawInputLogoRef = firstNonEmpty(
-    body.input_logo_url,
-    body.inputLogoUrl,
-    aiInput.logoUrl
-  );
-  const inputCharacterUrl = sanitizeUrl(rawInputCharacterRef);
-  const inputLogoUrl = sanitizeUrl(rawInputLogoRef);
   const outputImageUrl = sanitizeUrl(
     firstNonEmpty(
       body.output_image_url,
@@ -136,10 +124,6 @@ const parsePayloadInputs = (body = {}) => {
       firstNonEmpty(body.model_name, body.modelName, outputs.modelName),
       255
     ),
-    inputCharacterUrl,
-    inputLogoUrl,
-    invalidInputCharacterRef: Boolean(rawInputCharacterRef && !inputCharacterUrl),
-    invalidInputLogoRef: Boolean(rawInputLogoRef && !inputLogoUrl),
     inputReferenceUrl: sanitizeUrl(
       firstNonEmpty(
         body.input_reference_url,
@@ -433,22 +417,6 @@ export const createStudioSaveLabelVersionHandler = ({
         incomingOutputS3Key: payloadInputs.outputS3Key || null,
         incomingOutputPdfUrl: payloadInputs.outputPdfUrl || null,
       });
-      if (payloadInputs.invalidInputLogoRef) {
-        return sendJsonImpl(400, {
-          ok: false,
-          error: "invalid_input_logo_url",
-          message:
-            "input_logo_url must be an HTTP(S) URL. Raw/base64 blobs are not accepted.",
-        });
-      }
-      if (payloadInputs.invalidInputCharacterRef) {
-        return sendJsonImpl(400, {
-          ok: false,
-          error: "invalid_input_character_url",
-          message:
-            "input_character_url must be an HTTP(S) URL. Raw/base64 blobs are not accepted.",
-        });
-      }
       const hasOutputRef = Boolean(
         payloadInputs.outputImageUrl ||
           payloadInputs.outputS3Url ||
@@ -493,9 +461,6 @@ export const createStudioSaveLabelVersionHandler = ({
           [STUDIO_FIELDS.labelVersions.promptText]: payloadInputs.promptText,
           [STUDIO_FIELDS.labelVersions.editPromptText]: payloadInputs.editPromptText,
           [STUDIO_FIELDS.labelVersions.modelName]: payloadInputs.modelName,
-          [STUDIO_FIELDS.labelVersions.inputCharacterUrl]:
-            payloadInputs.inputCharacterUrl,
-          [STUDIO_FIELDS.labelVersions.inputLogoUrl]: payloadInputs.inputLogoUrl,
           [STUDIO_FIELDS.labelVersions.inputReferenceUrl]:
             payloadInputs.inputReferenceUrl,
           [STUDIO_FIELDS.labelVersions.outputImageUrl]: payloadInputs.outputImageUrl,
