@@ -626,7 +626,30 @@ export const upsertCanonicalCustomer = async ({
   let existing = null;
   let matchedBy = null;
 
-  if (normalizedShopifyId) {
+  const preferredIds = uniqueRecordIds(preferredCustomerRecordIds);
+  if (preferredIds.length === 1) {
+    const preferred = await getRecordOrNull(STUDIO_TABLES.customers, preferredIds[0]);
+    const currentShopifyId = normalizeShopifyCustomerId(
+      preferred?.fields?.["Shopify ID"]
+    );
+    const currentEmail = normalizeEmail(preferred?.fields?.Email);
+    const hasClaimablePreferredShopifyId =
+      !currentShopifyId ||
+      (normalizedShopifyId && currentShopifyId === normalizedShopifyId);
+    const hasClaimablePreferredEmail =
+      !normalizedShopifyId &&
+      (!currentEmail || !normalizedEmail || currentEmail === normalizedEmail);
+
+    if (
+      preferred?.id &&
+      (hasClaimablePreferredShopifyId || hasClaimablePreferredEmail)
+    ) {
+      existing = preferred;
+      matchedBy = "preferred_record";
+    }
+  }
+
+  if (!existing?.id && normalizedShopifyId) {
     for (const lookupValue of buildShopifyCustomerIdLookupValues(
       normalizedShopifyId
     )) {
@@ -641,26 +664,6 @@ export const upsertCanonicalCustomer = async ({
   if (!existing?.id && normalizedEmail) {
     existing = await findOneBy(STUDIO_TABLES.customers, "Email", normalizedEmail);
     if (existing?.id) matchedBy = "email";
-  }
-
-  if (!existing?.id) {
-    const preferredIds = uniqueRecordIds(preferredCustomerRecordIds);
-    if (preferredIds.length === 1) {
-      const preferred = await getRecordOrNull(STUDIO_TABLES.customers, preferredIds[0]);
-      const currentShopifyId = normalizeShopifyCustomerId(
-        preferred?.fields?.["Shopify ID"]
-      );
-      const currentEmail = normalizeEmail(preferred?.fields?.Email);
-      const shopifyIdCompatible =
-        !currentShopifyId || currentShopifyId === normalizedShopifyId;
-      const emailCompatible =
-        !currentEmail || !normalizedEmail || currentEmail === normalizedEmail;
-
-      if (preferred?.id && shopifyIdCompatible && emailCompatible) {
-        existing = preferred;
-        matchedBy = "preferred_record";
-      }
-    }
   }
 
   const canonicalFields = {

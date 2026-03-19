@@ -34,6 +34,7 @@ const {
 const {
   mergeGuestCustomersIntoCanonical,
   createOrderRecordForSavedConfiguration,
+  upsertCanonicalCustomer,
 } = await import(
   "../netlify/functions/_lib/shopifyWebhookStudio.js"
 );
@@ -887,22 +888,14 @@ test("orders webhook creates and links billing address records", async () => {
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='9010')"
-        );
-      },
+      recordId: "recCanonicalBillingCustomer",
       response: {
-        records: [
-          {
-            id: "recCanonicalBillingCustomer",
-            fields: {
-              "Shopify ID": "9010",
-              Email: "billing@example.com",
-            },
-          },
-        ],
+        id: "recCanonicalBillingCustomer",
+        fields: {
+          "Shopify ID": "9010",
+          Email: "billing@example.com",
+          Source: "Guest",
+        },
       },
     },
     {
@@ -1176,7 +1169,7 @@ test("webhook processing fails closed when idempotency storage is unavailable", 
   }
 });
 
-test("guest order with _saved_configuration_id merges and enforces saved/label-version linkage", async () => {
+test("guest order with _saved_configuration_id claims the linked customer and enforces saved/label-version linkage", async () => {
   const fetchMock = installFetchSequence([
     {
       method: "GET",
@@ -1230,117 +1223,14 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='9001')"
-        );
-      },
+      recordId: "recGuestCustomer",
       response: {
-        records: [
-          {
-            id: "recCanonicalCustomer",
-            fields: {
-              "Shopify ID": "9001",
-              Email: "guest@example.com",
-              "First Name": "Guest",
-              "Last Name": "Buyer",
-              Source: "Shopify",
-              "Shop Domain": "wnbrmm-sg.myshopify.com",
-            },
-          },
-        ],
+        id: "recGuestCustomer",
+        fields: {
+          Email: "guest@example.com",
+          Source: "Guest",
+        },
       },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.savedConfigurations,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestCustomer', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recSavedConfigA",
-            fields: {
-              [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestCustomer"],
-            },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.savedConfigurations,
-      recordId: "recSavedConfigA",
-      assert: (call) => {
-        const fields = call.body?.records?.[0]?.fields || {};
-        assert.deepEqual(fields[STUDIO_FIELDS.savedConfigurations.customer], [
-          "recCanonicalCustomer",
-        ]);
-      },
-      response: { records: [{ id: "recSavedConfigA", fields: {} }] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.labels,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestCustomer', ARRAYJOIN({Customers}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recLabelA",
-            fields: { [STUDIO_FIELDS.labels.customers]: ["recGuestCustomer"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.labels,
-      recordId: "recLabelA",
-      assert: (call) => {
-        const fields = call.body?.records?.[0]?.fields || {};
-        assert.deepEqual(fields[STUDIO_FIELDS.labels.customers], [
-          "recCanonicalCustomer",
-        ]);
-      },
-      response: { records: [{ id: "recLabelA", fields: {} }] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.orders,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestCustomer', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recOrderOldGuest",
-            fields: { [STUDIO_FIELDS.orders.customer]: ["recGuestCustomer"] },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.orders,
-      recordId: "recOrderOldGuest",
-      assert: (call) => {
-        const fields = call.body?.records?.[0]?.fields || {};
-        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], ["recCanonicalCustomer"]);
-      },
-      response: { records: [{ id: "recOrderOldGuest", fields: {} }] },
     },
     {
       method: "PATCH",
@@ -1348,20 +1238,14 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
       recordId: "recGuestCustomer",
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
-        assert.equal(fields["Merge Status"], "Merged");
-        assert.deepEqual(fields["Merged Into Customer"], ["recCanonicalCustomer"]);
+        assert.equal(fields["Shopify ID"], "9001");
+        assert.equal(fields["First Name"], "Guest");
+        assert.equal(fields["Last Name"], "Buyer");
+        assert.equal(fields.Source, "Shopify");
+        assert.equal(fields["Shop Domain"], "wnbrmm-sg.myshopify.com");
       },
       response: {
-        records: [
-          {
-            id: "recGuestCustomer",
-            fields: {
-              "Merge Status": "Merged",
-              "Merged Into Customer": ["recCanonicalCustomer"],
-              "Merged At": "2026-03-12T00:00:00.000Z",
-            },
-          },
-        ],
+        records: [{ id: "recGuestCustomer", fields: {} }],
       },
     },
     {
@@ -1371,7 +1255,7 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
       response: {
         id: "recSavedConfigA",
         fields: {
-          [STUDIO_FIELDS.savedConfigurations.customer]: ["recCanonicalCustomer"],
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestCustomer"],
           [STUDIO_FIELDS.savedConfigurations.labels]: ["recLabelA"],
           [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
           [STUDIO_FIELDS.savedConfigurations.currentFrontLabelVersion]: [],
@@ -1395,7 +1279,7 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
         assert.equal(fields[STUDIO_FIELDS.orders.orderId], "123456789");
-        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], ["recCanonicalCustomer"]);
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], ["recGuestCustomer"]);
         assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
           "recSavedConfigA",
         ]);
@@ -1410,7 +1294,7 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
       response: {
         id: "recSavedConfigA",
         fields: {
-          [STUDIO_FIELDS.savedConfigurations.customer]: ["recCanonicalCustomer"],
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestCustomer"],
           [STUDIO_FIELDS.savedConfigurations.labels]: ["recLabelA"],
           [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
           [STUDIO_FIELDS.savedConfigurations.currentFrontLabelVersion]: [],
@@ -1541,11 +1425,9 @@ test("guest order with _saved_configuration_id merges and enforces saved/label-v
 
     assert.equal(res.statusCode, 200);
     assert.equal(res.body?.ok, true);
-    assert.equal(res.body?.canonical_customer_record_id, "recCanonicalCustomer");
+    assert.equal(res.body?.canonical_customer_record_id, "recGuestCustomer");
     assert.equal(res.body?.merge_candidates_count, 1);
-    assert.deepEqual(res.body?.merged_customer_pairs, [
-      "recGuestCustomer->recCanonicalCustomer",
-    ]);
+    assert.deepEqual(res.body?.merged_customer_pairs, []);
     assert.deepEqual(res.body?.updated_saved_configurations, ["recSavedConfigA"]);
     fetchMock.assertDone();
   } finally {
@@ -1609,88 +1491,26 @@ test("guest order with _session_id only resolves saved configuration and links o
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Email}='guest-session@example.com')"
-        );
-      },
+      recordId: "recGuestSession",
       response: {
-        records: [
-          {
-            id: "recCanonicalByEmail",
-            fields: {
-              Email: "guest-session@example.com",
-              Source: "Shopify",
-              "Shop Domain": "wnbrmm-sg.myshopify.com",
-            },
-          },
-        ],
+        id: "recGuestSession",
+        fields: {
+          Email: "guest-session@example.com",
+          Source: "Guest",
+        },
       },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.savedConfigurations,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestSession', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: {
-        records: [
-          {
-            id: "recSavedBySession",
-            fields: {
-              [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestSession"],
-            },
-          },
-        ],
-      },
-    },
-    {
-      method: "PATCH",
-      table: STUDIO_TABLES.savedConfigurations,
-      recordId: "recSavedBySession",
-      response: { records: [{ id: "recSavedBySession", fields: {} }] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.labels,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestSession', ARRAYJOIN({Customers}))"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.orders,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "FIND('recGuestSession', ARRAYJOIN({Customer}))"
-        );
-      },
-      response: { records: [] },
     },
     {
       method: "PATCH",
       table: STUDIO_TABLES.customers,
       recordId: "recGuestSession",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Source, "Shopify");
+        assert.equal(fields["Shop Domain"], "wnbrmm-sg.myshopify.com");
+      },
       response: {
-        records: [
-          {
-            id: "recGuestSession",
-            fields: {
-              "Merge Status": "Merged",
-              "Merged Into Customer": ["recCanonicalByEmail"],
-              "Merged At": "2026-03-12T00:00:00.000Z",
-            },
-          },
-        ],
+        records: [{ id: "recGuestSession", fields: {} }],
       },
     },
     {
@@ -1700,7 +1520,7 @@ test("guest order with _session_id only resolves saved configuration and links o
       response: {
         id: "recSavedBySession",
         fields: {
-          [STUDIO_FIELDS.savedConfigurations.customer]: ["recCanonicalByEmail"],
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestSession"],
           [STUDIO_FIELDS.savedConfigurations.labels]: [],
           [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
         },
@@ -1723,7 +1543,7 @@ test("guest order with _session_id only resolves saved configuration and links o
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
         assert.equal(fields[STUDIO_FIELDS.orders.orderId], "987001");
-        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], ["recCanonicalByEmail"]);
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], ["recGuestSession"]);
         assert.deepEqual(fields[STUDIO_FIELDS.orders.savedConfiguration], [
           "recSavedBySession",
         ]);
@@ -1737,7 +1557,7 @@ test("guest order with _session_id only resolves saved configuration and links o
       response: {
         id: "recSavedBySession",
         fields: {
-          [STUDIO_FIELDS.savedConfigurations.customer]: ["recCanonicalByEmail"],
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recGuestSession"],
           [STUDIO_FIELDS.savedConfigurations.labels]: [],
           [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
         },
@@ -1837,43 +1657,11 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='10425417531738')"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='gid://shopify/Customer/10425417531738')"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Email}='marcuswonder@hotmail.co.uk')"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
       recordId: "recGuestCustomerPromote",
       response: {
         id: "recGuestCustomerPromote",
         fields: {
+          Email: "stale-guest@example.com",
           Source: "Shopify",
           "Shop Domain": "wnbrmm-sg.myshopify.com",
         },
@@ -2006,6 +1794,57 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
     assert.equal(res.body?.merge_candidates_count, 1);
     assert.deepEqual(res.body?.merged_customer_pairs, []);
     assert.equal(res.body?.merged_records_updated, 0);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("upsertCanonicalCustomer prefers the linked Airtable customer when Shopify id already matches", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recPreferredCustomerSameId",
+      response: {
+        id: "recPreferredCustomerSameId",
+        fields: {
+          "Shopify ID": "10425417531738",
+          Email: "stale-guest@example.com",
+          Source: "Guest",
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recPreferredCustomerSameId",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Email, "marcuswonder@hotmail.co.uk");
+        assert.equal(fields["First Name"], "Marcus");
+        assert.equal(fields["Last Name"], "Smith");
+        assert.equal(fields.Source, "Shopify");
+      },
+      response: {
+        records: [{ id: "recPreferredCustomerSameId", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const result = await upsertCanonicalCustomer({
+      shopifyId: "gid://shopify/Customer/10425417531738",
+      email: "marcuswonder@hotmail.co.uk",
+      firstName: "Marcus",
+      lastName: "Smith",
+      preferredCustomerRecordIds: ["recPreferredCustomerSameId"],
+    });
+
+    assert.equal(result.customerRecordId, "recPreferredCustomerSameId");
+    assert.equal(result.created, false);
+    assert.equal(result.matchedBy, "preferred_record");
+    assert.equal(result.updated, true);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
