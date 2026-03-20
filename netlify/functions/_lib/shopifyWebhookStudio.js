@@ -425,11 +425,6 @@ const buildOrderSnapshotFields = (
       metadata.quantity,
       firstNonEmpty(configSnapshot?.quantity, configSnapshot?.qty)
     );
-  const productName = pickText(
-    metadata.product,
-    configSnapshot?.product_name,
-    configSnapshot?.productName
-  );
 
   return {
     [STUDIO_FIELDS.orders.configurationId]: normalizeText(
@@ -474,8 +469,6 @@ const buildOrderSnapshotFields = (
         metadata.sku,
         fields[STUDIO_FIELDS.savedConfigurations.internalSku]
       ) || undefined,
-    [STUDIO_FIELDS.orders.shopifyProduct]:
-      productName || undefined,
     [STUDIO_FIELDS.orders.shopifyProductId]:
       pickText(
         metadata.product_id,
@@ -753,40 +746,47 @@ export const upsertCanonicalCustomer = async ({
 
   const preferredIds = uniqueRecordIds(preferredCustomerRecordIds);
   const tryPreferredRecord = async () => {
-    if (preferredIds.length !== 1) return null;
-    let preferred = null;
-    try {
-      preferred = await getRecordOrNull(STUDIO_TABLES.customers, preferredIds[0]);
-    } catch (error) {
-      if (!isAirtableLookupRecoverableError(error)) throw error;
-      console.warn("[webhook] preferred customer lookup skipped", {
-        preferredCustomerRecordId: preferredIds[0],
-        status: error?.status,
-        errorType: parseAirtableErrorType(error),
-      });
-      return null;
-    }
-    const currentShopifyId = normalizeShopifyCustomerId(
-      preferred?.fields?.["Shopify ID"]
-    );
-    const currentEmail = normalizeEmail(preferred?.fields?.Email);
-    const hasClaimablePreferredShopifyId =
-      !currentShopifyId ||
-      (normalizedShopifyId && currentShopifyId === normalizedShopifyId);
-    const hasClaimablePreferredEmail =
-      !normalizedShopifyId &&
-      (!currentEmail || !normalizedEmail || currentEmail === normalizedEmail);
+    for (const preferredId of preferredIds) {
+      let preferred = null;
+      try {
+        preferred = await getRecordOrNull(STUDIO_TABLES.customers, preferredId);
+      } catch (error) {
+        if (!isAirtableLookupRecoverableError(error)) throw error;
+        console.warn("[webhook] preferred customer lookup skipped", {
+          preferredCustomerRecordId: preferredId,
+          status: error?.status,
+          errorType: parseAirtableErrorType(error),
+        });
+        continue;
+      }
+      const currentShopifyId = normalizeShopifyCustomerId(
+        preferred?.fields?.["Shopify ID"]
+      );
+      const currentEmail = normalizeEmail(preferred?.fields?.Email);
+      const hasClaimablePreferredShopifyId =
+        !currentShopifyId ||
+        (normalizedShopifyId && currentShopifyId === normalizedShopifyId);
+      const hasClaimablePreferredEmail =
+        !normalizedShopifyId &&
+        (!currentEmail || !normalizedEmail || currentEmail === normalizedEmail);
 
-    if (
-      preferred?.id &&
-      (hasClaimablePreferredShopifyId || hasClaimablePreferredEmail)
-    ) {
-      return preferred;
+      if (
+        preferred?.id &&
+        (hasClaimablePreferredShopifyId || hasClaimablePreferredEmail)
+      ) {
+        return preferred;
+      }
     }
     return null;
   };
 
-  if (normalizedShopifyId) {
+  const preferred = await tryPreferredRecord();
+  if (preferred?.id) {
+    existing = preferred;
+    matchedBy = "preferred_record";
+  }
+
+  if (!existing?.id && normalizedShopifyId) {
     for (const lookupValue of buildShopifyCustomerIdLookupValues(
       normalizedShopifyId
     )) {
@@ -795,14 +795,6 @@ export const upsertCanonicalCustomer = async ({
         matchedBy = "shopify_id";
         break;
       }
-    }
-  }
-
-  if (!existing?.id) {
-    const preferred = await tryPreferredRecord();
-    if (preferred?.id) {
-      existing = preferred;
-      matchedBy = "preferred_record";
     }
   }
 

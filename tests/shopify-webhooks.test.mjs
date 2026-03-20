@@ -755,10 +755,7 @@ test("order record helper copies saved configuration snapshot fields into Orders
         assert.equal(fields[STUDIO_FIELDS.orders.closureSelection], "Wooden Cork");
         assert.equal(fields[STUDIO_FIELDS.orders.waxSelection], "Black");
         assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-123");
-        assert.equal(
-          fields[STUDIO_FIELDS.orders.shopifyProduct],
-          "Build Your Rum Brand"
-        );
+        assert.ok(!(STUDIO_FIELDS.orders.shopifyProduct in fields));
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10243100311898");
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "445566778899");
         assert.equal(fields[STUDIO_FIELDS.orders.quantity], 3);
@@ -872,7 +869,7 @@ test("order record helper prefers Shopify line-item metadata over saved configur
         assert.equal(fields[STUDIO_FIELDS.orders.closureSelection], "Gold Stopper");
         assert.equal(fields[STUDIO_FIELDS.orders.waxSelection], "Emerald");
         assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-LINE-ITEM");
-        assert.equal(fields[STUDIO_FIELDS.orders.shopifyProduct], "Build Your Vodka Brand");
+        assert.ok(!(STUDIO_FIELDS.orders.shopifyProduct in fields));
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10243095429466");
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "6677889900");
         assert.equal(fields[STUDIO_FIELDS.orders.quantity], 2);
@@ -988,23 +985,14 @@ test("orders webhook creates and links billing address records", async () => {
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='9010')"
-        );
-      },
+      recordId: "recCanonicalBillingCustomer",
       response: {
-        records: [
-          {
-            id: "recCanonicalBillingCustomer",
-            fields: {
-              "Shopify ID": "9010",
-              Email: "billing@example.com",
-              Source: "Guest",
-            },
-          },
-        ],
+        id: "recCanonicalBillingCustomer",
+        fields: {
+          "Shopify ID": "9010",
+          Email: "billing@example.com",
+          Source: "Guest",
+        },
       },
     },
     {
@@ -1339,28 +1327,6 @@ test("guest order with _saved_configuration_id claims the linked customer and en
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(formula, "({Shopify ID}='9001')");
-      },
-      response: {
-        records: [],
-      },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        const formula = call.url.searchParams.get("filterByFormula") || "";
-        assert.equal(formula, "({Shopify ID}='gid://shopify/Customer/9001')");
-      },
-      response: {
-        records: [],
-      },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
       recordId: "recGuestCustomer",
       response: {
         id: "recGuestCustomer",
@@ -1627,25 +1593,16 @@ test("orders/create writes Shopify order details metafield when admin token is c
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='9002')"
-        );
-      },
+      recordId: "recCanonicalMetaCustomer",
       response: {
-        records: [
-          {
-            id: "recCanonicalMetaCustomer",
-            fields: {
-              "Shopify ID": "9002",
-              "First Name": "Marcus",
-              "Last Name": "Smith",
-              Source: "Shopify",
-              "Shop Domain": "wnbrmm-sg.myshopify.com",
-            },
-          },
-        ],
+        id: "recCanonicalMetaCustomer",
+        fields: {
+          "Shopify ID": "9002",
+          "First Name": "Marcus",
+          "Last Name": "Smith",
+          Source: "Shopify",
+          "Shop Domain": "wnbrmm-sg.myshopify.com",
+        },
       },
     },
     {
@@ -1699,7 +1656,7 @@ test("orders/create writes Shopify order details metafield when admin token is c
         assert.equal(fields[STUDIO_FIELDS.orders.closureSelection], "Natural Cork");
         assert.equal(fields[STUDIO_FIELDS.orders.waxSelection], "Crimson");
         assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-META-001");
-        assert.equal(fields[STUDIO_FIELDS.orders.shopifyProduct], "Build Your Gin Brand");
+        assert.ok(!(STUDIO_FIELDS.orders.shopifyProduct in fields));
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10197521465690");
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "555111222");
         assert.equal(fields[STUDIO_FIELDS.orders.quantity], 2);
@@ -2149,28 +2106,6 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='10425417531738')"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='gid://shopify/Customer/10425417531738')"
-        );
-      },
-      response: { records: [] },
-    },
-    {
-      method: "GET",
-      table: STUDIO_TABLES.customers,
       recordId: "recGuestCustomerPromote",
       response: {
         id: "recGuestCustomerPromote",
@@ -2372,43 +2307,34 @@ test("orders/create ignores unsupported Shopify product ids", async () => {
   }
 });
 
-test("upsertCanonicalCustomer prioritizes Shopify id over the preferred Airtable record", async () => {
+test("upsertCanonicalCustomer claims the preferred Airtable record before global Shopify id lookup", async () => {
   const fetchMock = installFetchSequence([
     {
       method: "GET",
       table: STUDIO_TABLES.customers,
-      assert: (call) => {
-        assert.equal(
-          call.url.searchParams.get("filterByFormula"),
-          "({Shopify ID}='10425417531738')"
-        );
-      },
+      recordId: "recPreferredGuestCustomer",
       response: {
-        records: [
-          {
-            id: "recPreferredCustomerSameId",
-            fields: {
-              "Shopify ID": "10425417531738",
-              Email: "stale-guest@example.com",
-              Source: "Guest",
-            },
-          },
-        ],
+        id: "recPreferredGuestCustomer",
+        fields: {
+          Email: "stale-guest@example.com",
+          Source: "Guest",
+        },
       },
     },
     {
       method: "PATCH",
       table: STUDIO_TABLES.customers,
-      recordId: "recPreferredCustomerSameId",
+      recordId: "recPreferredGuestCustomer",
       assert: (call) => {
         const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields["Shopify ID"], "10425417531738");
         assert.equal(fields.Email, "marcuswonder@hotmail.co.uk");
         assert.equal(fields["First Name"], "Marcus");
         assert.equal(fields["Last Name"], "Smith");
         assert.equal(fields.Source, "Shopify");
       },
       response: {
-        records: [{ id: "recPreferredCustomerSameId", fields: {} }],
+        records: [{ id: "recPreferredGuestCustomer", fields: {} }],
       },
     },
   ]);
@@ -2419,12 +2345,12 @@ test("upsertCanonicalCustomer prioritizes Shopify id over the preferred Airtable
       email: "marcuswonder@hotmail.co.uk",
       firstName: "Marcus",
       lastName: "Smith",
-      preferredCustomerRecordIds: ["recPreferredCustomerSameId"],
+      preferredCustomerRecordIds: ["recPreferredGuestCustomer"],
     });
 
-    assert.equal(result.customerRecordId, "recPreferredCustomerSameId");
+    assert.equal(result.customerRecordId, "recPreferredGuestCustomer");
     assert.equal(result.created, false);
-    assert.equal(result.matchedBy, "shopify_id");
+    assert.equal(result.matchedBy, "preferred_record");
     assert.equal(result.updated, true);
     fetchMock.assertDone();
   } finally {
