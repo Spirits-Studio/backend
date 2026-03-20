@@ -336,6 +336,17 @@ const normalizeOrderQuantity = (value) => {
   return integerValue > 0 ? integerValue : null;
 };
 
+const ALLOWED_STUDIO_ORDER_PRODUCT_IDS = new Set([
+  "10781413704026",
+  "10532134027610",
+  "10197521465690",
+  "10243095429466",
+  "10243096445274",
+  "10243100311898",
+]);
+
+const normalizeShopifyProductId = (value) => normalizeText(value, 255);
+
 const buildOrderSnapshotFields = (savedConfigRecord, { quantity = null } = {}) => {
   const fields = savedConfigRecord?.fields || {};
   const configJson = sanitizeText(
@@ -451,6 +462,7 @@ export const normalizeOrderWebhookPayload = (payload, envelope = {}) => {
     const mergedProperties = parseLineItemProperties(lineItem, noteFallback);
     return {
       id: lineItem?.id ?? null,
+      product_id: normalizeShopifyProductId(lineItem?.product_id),
       variant_id: lineItem?.variant_id ?? null,
       quantity: Number(lineItem?.quantity || 0) || 0,
       properties: {
@@ -888,9 +900,14 @@ const addSignalVersionIds = (entry, signal) => {
 
 export const collectOrderSignals = async (orderPayload) => {
   const normalizedOrder = normalizeOrderWebhookPayload(orderPayload || {});
-  const signals = Array.isArray(normalizedOrder?.order?.line_items)
+  const allSignals = Array.isArray(normalizedOrder?.order?.line_items)
     ? normalizedOrder.order.line_items
     : [];
+  const signals = allSignals.filter((line) =>
+    ALLOWED_STUDIO_ORDER_PRODUCT_IDS.has(
+      normalizeShopifyProductId(line?.product_id) || ""
+    )
+  );
 
   const explicitCustomerRecordIds = uniqueRecordIds(
     signals.map((line) => line?.properties?._ss_customer_airtable_id)

@@ -146,6 +146,50 @@ test("order-details requires order_id or saved_configuration_id", async () => {
   }
 });
 
+test("order-details authorizes staff via logged_in_customer_id when proxy email is absent", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(call.url.searchParams.get("maxRecords"), "1");
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='9001')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recStaffCustomerA",
+            fields: {
+              Email: "staff@spiritsstudio.co.uk",
+            },
+          },
+        ],
+      },
+    },
+  ]);
+
+  try {
+    const response = await orderDetails(
+      createProxyEvent({
+        query: {
+          logged_in_customer_id: "gid://shopify/Customer/9001",
+        },
+      })
+    );
+
+    assert.equal(response.status, 400);
+    const payload = await response.json();
+    assert.equal(payload.ok, false);
+    assert.equal(payload.error, "missing_order_id");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("order-details returns normalized order payload", async () => {
   const fetchMock = installFetchSequence([
     {

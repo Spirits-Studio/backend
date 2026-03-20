@@ -1076,6 +1076,7 @@ test("orders webhook creates and links billing address records", async () => {
         line_items: [
           {
             id: 11,
+            product_id: 10243100311898,
             properties: [
               {
                 name: "_saved_configuration_id",
@@ -1449,6 +1450,7 @@ test("guest order with _saved_configuration_id claims the linked customer and en
         line_items: [
           {
             id: 1,
+            product_id: 10243100311898,
             quantity: 2,
             properties: [
               { name: "_saved_configuration_id", value: "recSavedConfigA" },
@@ -1632,6 +1634,7 @@ test("guest order with _session_id only resolves saved configuration and links o
         line_items: [
           {
             id: 99,
+            product_id: 10243100311898,
             properties: [{ name: "_session_id", value: "session-only-1" }],
           },
         ],
@@ -1834,6 +1837,7 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
         line_items: [
           {
             id: 1,
+            product_id: 10243100311898,
             properties: [
               {
                 name: "_saved_configuration_id",
@@ -1851,6 +1855,66 @@ test("orders/paid promotes a single linked guest customer record in place", asyn
     assert.equal(res.statusCode, 200);
     assert.equal(res.body?.ok, true);
     assert.equal(res.body?.canonical_customer_record_id, "recGuestCustomerPromote");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("orders/create ignores unsupported Shopify product ids", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_order_unsupported_product_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookUnsupportedProduct1", fields: {} }] },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookUnsupportedProduct1",
+      response: { records: [{ id: "recWebhookUnsupportedProduct1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "orders/create",
+      webhookId: "wh_order_unsupported_product_1",
+      payload: {
+        id: 5550001,
+        email: null,
+        customer: {},
+        line_items: [
+          {
+            id: 1,
+            product_id: 99999999999999,
+            quantity: 1,
+            properties: [
+              { name: "_saved_configuration_id", value: "recSavedConfigA" },
+            ],
+          },
+        ],
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersCreate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.deepEqual(res.body?.created_order_records, []);
+    assert.deepEqual(res.body?.updated_saved_configurations, []);
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
