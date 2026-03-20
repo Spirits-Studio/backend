@@ -329,7 +329,14 @@ const getFrontLabelUrlFromSnapshot = (snapshot) => {
   return null;
 };
 
-const buildOrderSnapshotFields = (savedConfigRecord) => {
+const normalizeOrderQuantity = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return null;
+  const integerValue = Math.trunc(numericValue);
+  return integerValue > 0 ? integerValue : null;
+};
+
+const buildOrderSnapshotFields = (savedConfigRecord, { quantity = null } = {}) => {
   const fields = savedConfigRecord?.fields || {};
   const configJson = sanitizeText(
     getFieldValue(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.configJson),
@@ -369,6 +376,9 @@ const buildOrderSnapshotFields = (savedConfigRecord) => {
     ) ||
     getFrontLabelUrlFromSnapshot(configSnapshot) ||
     null;
+  const normalizedQuantity =
+    normalizeOrderQuantity(quantity) ??
+    normalizeOrderQuantity(firstNonEmpty(configSnapshot?.quantity, configSnapshot?.qty));
 
   return {
     [STUDIO_FIELDS.orders.configurationId]: normalizeText(
@@ -415,6 +425,7 @@ const buildOrderSnapshotFields = (savedConfigRecord) => {
       fields[STUDIO_FIELDS.savedConfigurations.shopifyVariantId],
       255
     ) || undefined,
+    [STUDIO_FIELDS.orders.quantity]: normalizedQuantity ?? undefined,
     [STUDIO_FIELDS.orders.configJson]: configJson || undefined,
     [STUDIO_FIELDS.orders.frontLabelUrl]: frontLabelUrl || undefined,
     [STUDIO_FIELDS.orders.frontLabel]: toAttachmentFieldFromUrl(frontLabelUrl),
@@ -858,6 +869,7 @@ const ensureSavedConfigSignalsEntry = (map, savedConfigurationRecordId) => {
       front_version_ids: new Set(),
       back_version_ids: new Set(),
       session_ids: new Set(),
+      quantity: 0,
     });
   }
   return map.get(key);
@@ -901,10 +913,12 @@ export const collectOrderSignals = async (orderPayload) => {
     const properties = line?.properties || {};
     const savedConfigId = normalizeRecordId(properties._saved_configuration_id);
     const sessionId = normalizeText(properties._session_id, 255);
+    const lineQuantity = normalizeOrderQuantity(line?.quantity) || 0;
 
     if (savedConfigId) {
       const entry = ensureSavedConfigSignalsEntry(savedConfigSignals, savedConfigId);
       addSignalVersionIds(entry, properties);
+      entry.quantity += lineQuantity;
     }
 
     if (sessionId) {
@@ -913,6 +927,7 @@ export const collectOrderSignals = async (orderPayload) => {
           _session_id: sessionId,
           _label_front_version_id: null,
           _label_back_version_id: null,
+          _quantity: 0,
         });
       }
       const entry = sessionSignalMap.get(sessionId);
@@ -924,6 +939,7 @@ export const collectOrderSignals = async (orderPayload) => {
         entry._label_back_version_id =
           normalizeRecordId(properties._label_back_version_id) || null;
       }
+      entry._quantity += lineQuantity;
     }
   });
 
@@ -943,7 +959,9 @@ export const collectOrderSignals = async (orderPayload) => {
     const matches = await listSavedConfigurationsBySessionId(sessionId);
     for (const savedConfigRecord of matches) {
       const entry = ensureSavedConfigSignalsEntry(savedConfigSignals, savedConfigRecord?.id);
-      addSignalVersionIds(entry, sessionSignalMap.get(sessionId));
+      const sessionSignal = sessionSignalMap.get(sessionId);
+      addSignalVersionIds(entry, sessionSignal);
+      entry.quantity += normalizeOrderQuantity(sessionSignal?._quantity) || 0;
 
       getLinkedIds(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.customer).forEach((id) => {
         candidateCustomerIds.add(id);
@@ -965,6 +983,7 @@ export const collectOrderSignals = async (orderPayload) => {
       front_version_ids: uniqueRecordIds(Array.from(entry.front_version_ids)),
       back_version_ids: uniqueRecordIds(Array.from(entry.back_version_ids)),
       session_ids: uniqueTextValues(Array.from(entry.session_ids), 255),
+      quantity: normalizeOrderQuantity(entry.quantity) || null,
     })),
   };
 };
@@ -1127,6 +1146,7 @@ export const createOrderRecordForSavedConfiguration = async ({
   savedConfigurationRecordId,
   savedConfigurationRecord = null,
   customerRecordIds = [],
+  quantity = null,
 }) => {
   const savedConfigId = normalizeRecordId(savedConfigurationRecordId);
   if (!savedConfigId) return null;
@@ -1155,7 +1175,7 @@ export const createOrderRecordForSavedConfiguration = async ({
       linkedCustomerIds.length > 0 ? linkedCustomerIds : undefined,
     [STUDIO_FIELDS.orders.savedConfiguration]: [savedConfigId],
     [STUDIO_FIELDS.orders.orderStatus]: normalizedOrderStatus,
-    ...buildOrderSnapshotFields(savedConfigRecord),
+    ...buildOrderSnapshotFields(savedConfigRecord, { quantity }),
   };
 
   const existingOrderRecord = Array.isArray(existingOrderRecords)

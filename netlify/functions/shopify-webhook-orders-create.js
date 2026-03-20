@@ -202,6 +202,7 @@ export const createShopifyWebhookOrdersHandler = ({
           savedConfigurationRecordId,
           savedConfigurationRecord: savedConfigRecord,
           customerRecordIds: linkedCustomerIds,
+          quantity: signal?.quantity,
         });
 
         const billingAddressRecord = await upsertBillingAddressForOrder({

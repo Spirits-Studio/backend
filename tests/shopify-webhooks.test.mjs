@@ -757,6 +757,7 @@ test("order record helper copies saved configuration snapshot fields into Orders
         assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-123");
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10243100311898");
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "445566778899");
+        assert.equal(fields[STUDIO_FIELDS.orders.quantity], 3);
         assert.equal(
           fields[STUDIO_FIELDS.orders.configJson],
           JSON.stringify({
@@ -831,6 +832,7 @@ test("order record helper copies saved configuration snapshot fields into Orders
         },
       },
       customerRecordIds: ["recCanonicalCustomer"],
+      quantity: 3,
     });
 
     assert.equal(record?.id, "recOrderSnapshotA");
@@ -1320,6 +1322,7 @@ test("guest order with _saved_configuration_id claims the linked customer and en
           "recSavedConfigA",
         ]);
         assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Ordered");
+        assert.equal(fields[STUDIO_FIELDS.orders.quantity], 2);
       },
       response: { records: [{ id: "recOrderNew1", fields: {} }] },
     },
@@ -1446,6 +1449,7 @@ test("guest order with _saved_configuration_id claims the linked customer and en
         line_items: [
           {
             id: 1,
+            quantity: 2,
             properties: [
               { name: "_saved_configuration_id", value: "recSavedConfigA" },
               { name: "_label_front_version_id", value: "recVersionFrontCurrent" },
