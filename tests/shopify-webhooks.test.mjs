@@ -2452,3 +2452,105 @@ test("customers/update falls back to phone before creating a new customer", asyn
     fetchMock.restore();
   }
 });
+
+test("customers/update skips when no Airtable customer matches", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_customer_update_skip_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookCustomerUpdateSkip1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='7999')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='gid://shopify/Customer/7999')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Email}='missing-update@example.com')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Phone}='+447700900999')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookCustomerUpdateSkip1",
+      response: { records: [{ id: "recWebhookCustomerUpdateSkip1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "customers/update",
+      webhookId: "wh_customer_update_skip_1",
+      payload: {
+        id: 7999,
+        email: "missing-update@example.com",
+        first_name: "Missing",
+        last_name: "Customer",
+        default_address: {
+          phone: "+447700900999",
+        },
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookCustomersUpdate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.canonical_customer_record_id, null);
+    assert.equal(res.body?.created_customer, false);
+    assert.equal(res.body?.updated_customer, false);
+    assert.equal(res.body?.matched_by, null);
+    assert.equal(res.body?.skipped, true);
+    assert.equal(res.body?.reason, "customer_not_found");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});

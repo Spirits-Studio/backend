@@ -636,6 +636,7 @@ export const upsertCanonicalCustomer = async ({
   shopDomain,
   creationSource = null,
   preferredCustomerRecordIds = [],
+  allowCreate = true,
 }) => {
   const normalizedShopifyId = normalizeShopifyCustomerId(shopifyId);
   const normalizedEmail = normalizeEmail(email);
@@ -773,6 +774,17 @@ export const upsertCanonicalCustomer = async ({
       matchedBy,
       updated: Object.keys(updates).length > 0,
       record: updated || existing,
+    };
+  }
+
+  if (!allowCreate) {
+    return {
+      customerRecordId: null,
+      created: false,
+      matchedBy: null,
+      updated: false,
+      record: null,
+      skippedCreate: true,
     };
   }
 

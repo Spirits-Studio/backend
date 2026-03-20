@@ -24,6 +24,7 @@ export const createShopifyWebhookCustomersHandler = ({
   expectedTopic,
 }) =>
   async (req, res) => {
+    const allowCreate = endpoint !== "shopify-webhook-customers-update";
     const sendJson = (status, payload) => sendWebhookJson(res, status, payload, req);
     const sendText = (status, text) => sendWebhookText(res, status, text, req);
     const envelope = await parseWebhookEnvelope(req);
@@ -144,16 +145,27 @@ export const createShopifyWebhookCustomersHandler = ({
         phone: customer?.phone,
         shopDomain: envelope?.shop_domain,
         creationSource: resolveCustomerCreationSource(endpoint),
+        allowCreate,
       });
 
       const canonicalCustomerRecordId = normalizeRecordId(
         canonicalCustomer?.customerRecordId
       );
+      const skippedMissingCustomer =
+        !allowCreate &&
+        !canonicalCustomerRecordId &&
+        !canonicalCustomer?.created &&
+        !canonicalCustomer?.updated;
 
-      logger.info("customer webhook processed", {
+      logger.info(
+        skippedMissingCustomer
+          ? "customer webhook skipped; no matching Airtable customer"
+          : "customer webhook processed",
+        {
         canonical_customer_record_id: canonicalCustomerRecordId,
         status: "processed",
-      });
+        }
+      );
 
       await completeWebhookIdempotency({
         recordId: idempotency.recordId,
@@ -167,7 +179,10 @@ export const createShopifyWebhookCustomersHandler = ({
         webhook_id: envelope.webhook_id || null,
         canonical_customer_record_id: canonicalCustomerRecordId,
         created_customer: Boolean(canonicalCustomer?.created),
+        updated_customer: Boolean(canonicalCustomer?.updated),
         matched_by: canonicalCustomer?.matchedBy || null,
+        skipped: skippedMissingCustomer,
+        reason: skippedMissingCustomer ? "customer_not_found" : null,
         idempotent_skip: false,
         status: "processed",
       });
