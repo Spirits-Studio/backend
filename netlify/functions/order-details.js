@@ -5,6 +5,7 @@ import {
   sendJson,
   parseBody,
   firstNonEmpty,
+  normalizeRecordId,
   sanitizeText,
   sanitizeUrl,
   getFieldValue,
@@ -50,6 +51,9 @@ const isStaffEmail = (value) => {
   const email = normalizeStaffEmail(value);
   return Boolean(email && email.endsWith(STAFF_EMAIL_SUFFIX));
 };
+
+const buildSavedConfigurationLookupFormula = (savedConfigurationId) =>
+  `FIND('${escapeFormulaValue(savedConfigurationId)}', ARRAYJOIN({${STUDIO_FIELDS.orders.savedConfiguration}}))`;
 
 const toPositiveInteger = (value) => {
   const number = Number(value);
@@ -179,6 +183,14 @@ export default withShopifyProxy(async (arg, { qs, isV2, method }) => {
       firstNonEmpty(qs.order_id, qs.orderId, body.order_id, body.orderId),
       255
     );
+    const savedConfigurationId = normalizeRecordId(
+      firstNonEmpty(
+        qs.saved_configuration_id,
+        qs.savedConfigurationId,
+        body.saved_configuration_id,
+        body.savedConfigurationId
+      )
+    );
 
     if (!isStaffEmail(staffEmail)) {
       return sendJson(403, {
@@ -188,16 +200,18 @@ export default withShopifyProxy(async (arg, { qs, isV2, method }) => {
       });
     }
 
-    if (!orderId) {
+    if (!orderId && !savedConfigurationId) {
       return sendJson(400, {
         ok: false,
         error: "missing_order_id",
-        message: "order_id is required.",
+        message: "order_id or saved_configuration_id is required.",
       });
     }
 
     const orderRecords = await listAllRecords(STUDIO_TABLES.orders, {
-      filterByFormula: `{${STUDIO_FIELDS.orders.orderId}}='${escapeFormulaValue(orderId)}'`,
+      filterByFormula: orderId
+        ? `{${STUDIO_FIELDS.orders.orderId}}='${escapeFormulaValue(orderId)}'`
+        : buildSavedConfigurationLookupFormula(savedConfigurationId),
       maxRecords: 25,
     });
 
@@ -205,7 +219,9 @@ export default withShopifyProxy(async (arg, { qs, isV2, method }) => {
       return sendJson(404, {
         ok: false,
         error: "not_found",
-        message: "No order details were found for that order_id.",
+        message: orderId
+          ? "No order details were found for that order_id."
+          : "No order details were found for that saved_configuration_id.",
       });
     }
 
@@ -242,7 +258,11 @@ export default withShopifyProxy(async (arg, { qs, isV2, method }) => {
 
     return sendJson(200, {
       ok: true,
-      orderId,
+      orderId:
+        orderId ||
+        sanitizeText(getFieldValue(orderRecords[0], STUDIO_FIELDS.orders.orderId), 255) ||
+        null,
+      savedConfigurationId: savedConfigurationId || null,
       records,
     });
   } catch (error) {

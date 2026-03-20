@@ -118,10 +118,10 @@ test("order-details rejects non-staff customers", async () => {
   }
 });
 
-test("order-details requires order_id", async () => {
+test("order-details requires order_id or saved_configuration_id", async () => {
   const originalFetch = global.fetch;
   global.fetch = async () => {
-    throw new Error("fetch should not be called when order_id is missing");
+    throw new Error("fetch should not be called when lookup params are missing");
   };
 
   try {
@@ -137,6 +137,10 @@ test("order-details requires order_id", async () => {
     const payload = await response.json();
     assert.equal(payload.ok, false);
     assert.equal(payload.error, "missing_order_id");
+    assert.equal(
+      payload.message,
+      "order_id or saved_configuration_id is required."
+    );
   } finally {
     global.fetch = originalFetch;
   }
@@ -223,6 +227,7 @@ test("order-details returns normalized order payload", async () => {
     const payload = await response.json();
     assert.equal(payload.ok, true);
     assert.equal(payload.orderId, "1001");
+    assert.equal(payload.savedConfigurationId, null);
     assert.deepEqual(payload.records, [
       {
         recordId: "recOrderA",
@@ -244,6 +249,84 @@ test("order-details returns normalized order payload", async () => {
         frontLabelUrl: "https://cdn.example.com/front-label.png",
       },
     ]);
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("order-details supports saved_configuration_id lookup", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "FIND('recSavedConfigA', ARRAYJOIN({Saved Configuration}))"
+        );
+        assert.equal(call.url.searchParams.get("maxRecords"), "25");
+        assert.equal(call.url.searchParams.get("pageSize"), "100");
+      },
+      response: {
+        records: [
+          {
+            id: "recOrderSavedConfig",
+            fields: {
+              [STUDIO_FIELDS.orders.orderId]: "2002",
+              [STUDIO_FIELDS.orders.savedConfiguration]: ["recSavedConfigA"],
+              [STUDIO_FIELDS.orders.customer]: ["recCustomerB"],
+              [STUDIO_FIELDS.orders.addresses]: ["recAddressB"],
+              [STUDIO_FIELDS.orders.shopifyProduct]: "Build Your Brand",
+              [STUDIO_FIELDS.orders.displayName]: "Golden Label",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recCustomerB",
+      response: {
+        id: "recCustomerB",
+        fields: {
+          "Full Name": "Staff User",
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.addresses,
+      recordId: "recAddressB",
+      response: {
+        id: "recAddressB",
+        fields: {
+          [STUDIO_FIELDS.addresses.fullAddress]:
+            "1 Saved Config Way, London, EC1A 1AA, United Kingdom",
+        },
+      },
+    },
+  ]);
+
+  try {
+    const response = await orderDetails(
+      createProxyEvent({
+        query: {
+          saved_configuration_id: "recSavedConfigA",
+          logged_in_customer_email: "staff@spiritsstudio.co.uk",
+        },
+      })
+    );
+
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.orderId, "2002");
+    assert.equal(payload.savedConfigurationId, "recSavedConfigA");
+    assert.equal(payload.records?.length, 1);
+    assert.equal(payload.records?.[0]?.recordId, "recOrderSavedConfig");
+    assert.equal(payload.records?.[0]?.displayName, "Golden Label");
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
