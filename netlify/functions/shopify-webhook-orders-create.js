@@ -19,8 +19,11 @@ import {
   collectOrderSignals,
   ensureSavedConfigurationOrderLinkage,
   createOrderRecordForSavedConfiguration,
+  buildShopifyOrderDetailsItem,
+  buildShopifyOrderDetailsMetafieldPayload,
   upsertBillingAddressForOrder,
 } from "./_lib/shopifyWebhookStudio.js";
+import { setShopifyOrderDetailsMetafield } from "./_lib/shopifyAdmin.js";
 import {
   STUDIO_FIELDS,
   STUDIO_TABLES,
@@ -179,6 +182,7 @@ export const createShopifyWebhookOrdersHandler = ({
       const touchedConfigIds = [];
       const createdOrderRecordIds = [];
       const linkedAddressRecordIds = [];
+      const shopifyOrderDetailsItems = [];
 
       for (const signal of savedConfigurationSignals) {
         const savedConfigurationRecordId = normalizeRecordId(
@@ -203,6 +207,7 @@ export const createShopifyWebhookOrdersHandler = ({
           savedConfigurationRecord: savedConfigRecord,
           customerRecordIds: linkedCustomerIds,
           quantity: signal?.quantity,
+          lineItemMetadata: signal,
         });
 
         const billingAddressRecord = await upsertBillingAddressForOrder({
@@ -230,7 +235,37 @@ export const createShopifyWebhookOrdersHandler = ({
         touchedConfigIds.push(savedConfigurationRecordId);
         if (orderRecord?.id) createdOrderRecordIds.push(orderRecord.id);
         if (billingAddressRecord?.id) linkedAddressRecordIds.push(billingAddressRecord.id);
+
+        const shopifyOrderDetailsItem = buildShopifyOrderDetailsItem({
+          order,
+          savedConfigurationRecordId,
+          savedConfigurationRecord: savedConfigRecord,
+          orderRecordId: orderRecord?.id || null,
+          customerRecordId: linkedCustomerIds[0] || canonicalCustomerRecordId,
+          signal,
+        });
+        if (shopifyOrderDetailsItem) {
+          shopifyOrderDetailsItems.push(shopifyOrderDetailsItem);
+        }
       }
+
+      const shopifyOrderMetafieldPayload = buildShopifyOrderDetailsMetafieldPayload({
+        order,
+        orderStatus,
+        items: shopifyOrderDetailsItems,
+      });
+      const shopifyOrderMetafieldSync =
+        shopifyOrderDetailsItems.length > 0
+          ? await setShopifyOrderDetailsMetafield({
+              shopDomain: envelope?.shop_domain,
+              orderId: toOrderIdString(order?.id),
+              payload: shopifyOrderMetafieldPayload,
+            })
+          : {
+              ok: false,
+              skipped: true,
+              reason: "no_supported_order_items",
+            };
 
       const responsePayload = {
         ok: true,
@@ -241,6 +276,7 @@ export const createShopifyWebhookOrdersHandler = ({
         updated_saved_configurations: Array.from(new Set(touchedConfigIds)),
         created_order_records: Array.from(new Set(createdOrderRecordIds)),
         linked_address_records: Array.from(new Set(linkedAddressRecordIds)),
+        shopify_order_metafield_sync: shopifyOrderMetafieldSync,
         idempotent_skip: false,
         status: "processed",
       };

@@ -346,17 +346,50 @@ const ALLOWED_STUDIO_ORDER_PRODUCT_IDS = new Set([
 ]);
 
 const normalizeShopifyProductId = (value) => normalizeText(value, 255);
+const normalizeShopifyVariantId = (value) => normalizeText(value, 255);
+const SHOPIFY_ORDER_DETAILS_SCHEMA_VERSION = 1;
 
-const buildOrderSnapshotFields = (savedConfigRecord, { quantity = null } = {}) => {
+const pickText = (...values) => {
+  for (const value of values) {
+    const text = normalizeText(value, 255);
+    if (text) return text;
+  }
+  return null;
+};
+
+const pickUrl = (...values) => {
+  for (const value of values) {
+    const url = sanitizeUrl(value);
+    if (url) return url;
+  }
+  return null;
+};
+
+const pickQuantity = (...values) => {
+  for (const value of values) {
+    const quantity = normalizeOrderQuantity(value);
+    if (quantity != null) return quantity;
+  }
+  return null;
+};
+
+const buildOrderSnapshotFields = (
+  savedConfigRecord,
+  { quantity = null, lineItemMetadata = null } = {}
+) => {
   const fields = savedConfigRecord?.fields || {};
   const configJson = sanitizeText(
     getFieldValue(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.configJson),
     100_000
   );
   const configSnapshot = parseJsonField(configJson);
+  const metadata = lineItemMetadata && typeof lineItemMetadata === "object"
+    ? lineItemMetadata
+    : {};
 
   const previewImageUrl =
-    sanitizeUrl(
+    pickUrl(
+      metadata.preview_url,
       firstTextValue(
         getFieldValue(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.previewImageUrl),
         2048
@@ -365,18 +398,17 @@ const buildOrderSnapshotFields = (savedConfigRecord, { quantity = null } = {}) =
     firstAttachmentUrl(
       getFieldValue(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.previewImage)
     ) ||
-    sanitizeUrl(
-      firstNonEmpty(
-        configSnapshot?.preview_url,
-        configSnapshot?.previewUrl,
-        configSnapshot?.previewImage,
-        configSnapshot?.preview
-      )
+    pickUrl(
+      configSnapshot?.preview_url,
+      configSnapshot?.previewUrl,
+      configSnapshot?.previewImage,
+      configSnapshot?.preview
     ) ||
     null;
 
   const frontLabelUrl =
-    sanitizeUrl(
+    pickUrl(
+      metadata.front_label_url,
       firstTextValue(
         getFieldValue(
           savedConfigRecord,
@@ -388,18 +420,27 @@ const buildOrderSnapshotFields = (savedConfigRecord, { quantity = null } = {}) =
     getFrontLabelUrlFromSnapshot(configSnapshot) ||
     null;
   const normalizedQuantity =
-    normalizeOrderQuantity(quantity) ??
-    normalizeOrderQuantity(firstNonEmpty(configSnapshot?.quantity, configSnapshot?.qty));
+    pickQuantity(
+      quantity,
+      metadata.quantity,
+      firstNonEmpty(configSnapshot?.quantity, configSnapshot?.qty)
+    );
+  const productName = pickText(
+    metadata.product,
+    configSnapshot?.product_name,
+    configSnapshot?.productName
+  );
 
   return {
     [STUDIO_FIELDS.orders.configurationId]: normalizeText(
       fields[STUDIO_FIELDS.savedConfigurations.configurationId],
       80
     ) || undefined,
-    [STUDIO_FIELDS.orders.sessionId]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.sessionId],
-      255
-    ) || undefined,
+    [STUDIO_FIELDS.orders.sessionId]:
+      pickText(
+        metadata.session_id,
+        fields[STUDIO_FIELDS.savedConfigurations.sessionId]
+      ) || undefined,
     [STUDIO_FIELDS.orders.configuratorTool]: normalizeText(
       fields[STUDIO_FIELDS.savedConfigurations.configuratorTool],
       120
@@ -408,44 +449,54 @@ const buildOrderSnapshotFields = (savedConfigRecord, { quantity = null } = {}) =
       fields[STUDIO_FIELDS.savedConfigurations.alcoholSelection],
       120
     ) || undefined,
-    [STUDIO_FIELDS.orders.bottleSelection]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.bottleSelection],
-      120
-    ) || undefined,
-    [STUDIO_FIELDS.orders.liquidSelection]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.liquidSelection],
-      120
-    ) || undefined,
-    [STUDIO_FIELDS.orders.closureSelection]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.closureSelection],
-      120
-    ) || undefined,
-    [STUDIO_FIELDS.orders.waxSelection]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.waxSelection],
-      120
-    ) || undefined,
-    [STUDIO_FIELDS.orders.internalSku]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.internalSku],
-      255
-    ) || undefined,
-    [STUDIO_FIELDS.orders.shopifyProductId]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.shopifyProductId],
-      255
-    ) || undefined,
-    [STUDIO_FIELDS.orders.shopifyVariantId]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.shopifyVariantId],
-      255
-    ) || undefined,
+    [STUDIO_FIELDS.orders.bottleSelection]:
+      pickText(
+        metadata.bottle,
+        fields[STUDIO_FIELDS.savedConfigurations.bottleSelection]
+      ) || undefined,
+    [STUDIO_FIELDS.orders.liquidSelection]:
+      pickText(
+        metadata.liquid,
+        fields[STUDIO_FIELDS.savedConfigurations.liquidSelection]
+      ) || undefined,
+    [STUDIO_FIELDS.orders.closureSelection]:
+      pickText(
+        metadata.closure,
+        fields[STUDIO_FIELDS.savedConfigurations.closureSelection]
+      ) || undefined,
+    [STUDIO_FIELDS.orders.waxSelection]:
+      pickText(
+        metadata.wax,
+        fields[STUDIO_FIELDS.savedConfigurations.waxSelection]
+      ) || undefined,
+    [STUDIO_FIELDS.orders.internalSku]:
+      pickText(
+        metadata.sku,
+        fields[STUDIO_FIELDS.savedConfigurations.internalSku]
+      ) || undefined,
+    [STUDIO_FIELDS.orders.shopifyProduct]:
+      productName || undefined,
+    [STUDIO_FIELDS.orders.shopifyProductId]:
+      pickText(
+        metadata.product_id,
+        fields[STUDIO_FIELDS.savedConfigurations.shopifyProductId]
+      ) || undefined,
+    [STUDIO_FIELDS.orders.shopifyVariantId]:
+      pickText(
+        metadata.variant_id,
+        fields[STUDIO_FIELDS.savedConfigurations.shopifyVariantId]
+      ) || undefined,
     [STUDIO_FIELDS.orders.quantity]: normalizedQuantity ?? undefined,
     [STUDIO_FIELDS.orders.configJson]: configJson || undefined,
     [STUDIO_FIELDS.orders.frontLabelUrl]: frontLabelUrl || undefined,
     [STUDIO_FIELDS.orders.frontLabel]: toAttachmentFieldFromUrl(frontLabelUrl),
     [STUDIO_FIELDS.orders.previewImageUrl]: previewImageUrl || undefined,
     [STUDIO_FIELDS.orders.previewImage]: toAttachmentFieldFromUrl(previewImageUrl),
-    [STUDIO_FIELDS.orders.displayName]: normalizeText(
-      fields[STUDIO_FIELDS.savedConfigurations.displayName],
-      255
-    ) || undefined,
+    [STUDIO_FIELDS.orders.displayName]:
+      pickText(
+        metadata.display_name,
+        fields[STUDIO_FIELDS.savedConfigurations.displayName]
+      ) || undefined,
     [STUDIO_FIELDS.orders.creationSource]:
       normalizeOrderCreationSource(
         fields[STUDIO_FIELDS.savedConfigurations.creationSource]
@@ -463,8 +514,10 @@ export const normalizeOrderWebhookPayload = (payload, envelope = {}) => {
     return {
       id: lineItem?.id ?? null,
       product_id: normalizeShopifyProductId(lineItem?.product_id),
-      variant_id: lineItem?.variant_id ?? null,
-      quantity: Number(lineItem?.quantity || 0) || 0,
+      variant_id: normalizeShopifyVariantId(lineItem?.variant_id),
+      title: normalizeText(lineItem?.title ?? lineItem?.name, 255),
+      sku: normalizeText(lineItem?.sku, 255),
+      quantity: normalizeOrderQuantity(lineItem?.quantity) || 0,
       properties: {
         _saved_configuration_id: normalizeRecordId(
           readProperty(
@@ -498,6 +551,46 @@ export const normalizeOrderWebhookPayload = (payload, envelope = {}) => {
             "_ss_customer_airtable_id",
             "ss_customer_airtable_id"
           )
+        ),
+        _display_name: normalizeText(
+          readProperty(
+            mergedProperties,
+            "_display_name",
+            "display_name",
+            "Display Name"
+          ),
+          255
+        ),
+        _preview_url: sanitizeUrl(
+          readProperty(mergedProperties, "_preview_url", "preview_url", "Preview URL")
+        ) || null,
+        _front_label_url: sanitizeUrl(
+          readProperty(
+            mergedProperties,
+            "_front_label_url",
+            "front_label_url",
+            "Front Label URL"
+          )
+        ) || null,
+        _sku: normalizeText(
+          readProperty(mergedProperties, "_sku", "sku", "SKU"),
+          255
+        ),
+        bottle: normalizeText(readProperty(mergedProperties, "Bottle", "bottle"), 120),
+        liquid: normalizeText(readProperty(mergedProperties, "Liquid", "liquid"), 120),
+        closure: normalizeText(
+          readProperty(
+            mergedProperties,
+            "Closure",
+            "closure",
+            "Wood Closure",
+            "wood closure"
+          ),
+          120
+        ),
+        wax: normalizeText(
+          readProperty(mergedProperties, "Wax", "wax", "Wax Seal", "wax seal"),
+          120
         ),
       },
     };
@@ -893,6 +986,19 @@ const ensureSavedConfigSignalsEntry = (map, savedConfigurationRecordId) => {
       front_version_ids: new Set(),
       back_version_ids: new Set(),
       session_ids: new Set(),
+      customer_airtable_id: null,
+      display_name: null,
+      preview_url: null,
+      front_label_url: null,
+      sku: null,
+      bottle: null,
+      liquid: null,
+      closure: null,
+      wax: null,
+      product: null,
+      product_id: null,
+      variant_id: null,
+      session_id: null,
       quantity: 0,
     });
   }
@@ -910,6 +1016,47 @@ const addSignalVersionIds = (entry, signal) => {
   if (sessionId) entry.session_ids.add(sessionId);
 };
 
+const assignSignalText = (entry, key, value, maxLen = 255) => {
+  if (!entry || entry[key]) return;
+  const text = normalizeText(value, maxLen);
+  if (text) entry[key] = text;
+};
+
+const assignSignalUrl = (entry, key, value) => {
+  if (!entry || entry[key]) return;
+  const url = sanitizeUrl(value);
+  if (url) entry[key] = url;
+};
+
+const assignSignalRecordId = (entry, key, value) => {
+  if (!entry || entry[key]) return;
+  const recordId = normalizeRecordId(value);
+  if (recordId) entry[key] = recordId;
+};
+
+const mergeOrderLineSignalMetadata = (entry, line = {}) => {
+  if (!entry || !line || typeof line !== "object") return;
+  const properties = line?.properties || {};
+
+  assignSignalRecordId(
+    entry,
+    "customer_airtable_id",
+    properties?._ss_customer_airtable_id
+  );
+  assignSignalText(entry, "session_id", properties?._session_id, 255);
+  assignSignalText(entry, "display_name", properties?._display_name, 255);
+  assignSignalUrl(entry, "preview_url", properties?._preview_url);
+  assignSignalUrl(entry, "front_label_url", properties?._front_label_url);
+  assignSignalText(entry, "sku", properties?._sku || line?.sku, 255);
+  assignSignalText(entry, "bottle", properties?.bottle, 120);
+  assignSignalText(entry, "liquid", properties?.liquid, 120);
+  assignSignalText(entry, "closure", properties?.closure, 120);
+  assignSignalText(entry, "wax", properties?.wax, 120);
+  assignSignalText(entry, "product", line?.title, 255);
+  assignSignalText(entry, "product_id", line?.product_id, 255);
+  assignSignalText(entry, "variant_id", line?.variant_id, 255);
+};
+
 export const collectOrderSignals = async (orderPayload) => {
   const normalizedOrder = normalizeOrderWebhookPayload(orderPayload || {});
   const allSignals = Array.isArray(normalizedOrder?.order?.line_items)
@@ -919,6 +1066,9 @@ export const collectOrderSignals = async (orderPayload) => {
     ALLOWED_STUDIO_ORDER_PRODUCT_IDS.has(
       normalizeShopifyProductId(line?.product_id) || ""
     )
+  );
+  const sessionOnlySignals = signals.filter(
+    (line) => !normalizeRecordId(line?.properties?._saved_configuration_id)
   );
 
   const explicitCustomerRecordIds = uniqueRecordIds(
@@ -930,7 +1080,7 @@ export const collectOrderSignals = async (orderPayload) => {
   );
 
   const sessionIds = uniqueTextValues(
-    signals.map((line) => line?.properties?._session_id),
+    sessionOnlySignals.map((line) => line?.properties?._session_id),
     255
   );
 
@@ -947,15 +1097,28 @@ export const collectOrderSignals = async (orderPayload) => {
     if (savedConfigId) {
       const entry = ensureSavedConfigSignalsEntry(savedConfigSignals, savedConfigId);
       addSignalVersionIds(entry, properties);
+      mergeOrderLineSignalMetadata(entry, line);
       entry.quantity += lineQuantity;
     }
 
-    if (sessionId) {
+    if (!savedConfigId && sessionId) {
       if (!sessionSignalMap.has(sessionId)) {
         sessionSignalMap.set(sessionId, {
           _session_id: sessionId,
           _label_front_version_id: null,
           _label_back_version_id: null,
+          _ss_customer_airtable_id: null,
+          _display_name: null,
+          _preview_url: null,
+          _front_label_url: null,
+          _sku: null,
+          bottle: null,
+          liquid: null,
+          closure: null,
+          wax: null,
+          product: null,
+          product_id: null,
+          variant_id: null,
           _quantity: 0,
         });
       }
@@ -967,6 +1130,43 @@ export const collectOrderSignals = async (orderPayload) => {
       if (!entry._label_back_version_id) {
         entry._label_back_version_id =
           normalizeRecordId(properties._label_back_version_id) || null;
+      }
+      if (!entry._ss_customer_airtable_id) {
+        entry._ss_customer_airtable_id =
+          normalizeRecordId(properties._ss_customer_airtable_id) || null;
+      }
+      if (!entry._display_name) {
+        entry._display_name = normalizeText(properties._display_name, 255) || null;
+      }
+      if (!entry._preview_url) {
+        entry._preview_url = sanitizeUrl(properties._preview_url) || null;
+      }
+      if (!entry._front_label_url) {
+        entry._front_label_url = sanitizeUrl(properties._front_label_url) || null;
+      }
+      if (!entry._sku) {
+        entry._sku = normalizeText(properties._sku || line?.sku, 255) || null;
+      }
+      if (!entry.bottle) {
+        entry.bottle = normalizeText(properties.bottle, 120) || null;
+      }
+      if (!entry.liquid) {
+        entry.liquid = normalizeText(properties.liquid, 120) || null;
+      }
+      if (!entry.closure) {
+        entry.closure = normalizeText(properties.closure, 120) || null;
+      }
+      if (!entry.wax) {
+        entry.wax = normalizeText(properties.wax, 120) || null;
+      }
+      if (!entry.product) {
+        entry.product = normalizeText(line?.title, 255) || null;
+      }
+      if (!entry.product_id) {
+        entry.product_id = normalizeText(line?.product_id, 255) || null;
+      }
+      if (!entry.variant_id) {
+        entry.variant_id = normalizeText(line?.variant_id, 255) || null;
       }
       entry._quantity += lineQuantity;
     }
@@ -990,6 +1190,24 @@ export const collectOrderSignals = async (orderPayload) => {
       const entry = ensureSavedConfigSignalsEntry(savedConfigSignals, savedConfigRecord?.id);
       const sessionSignal = sessionSignalMap.get(sessionId);
       addSignalVersionIds(entry, sessionSignal);
+      mergeOrderLineSignalMetadata(entry, {
+        title: sessionSignal?.product,
+        product_id: sessionSignal?.product_id,
+        variant_id: sessionSignal?.variant_id,
+        sku: sessionSignal?._sku,
+        properties: {
+          _session_id: sessionSignal?._session_id,
+          _ss_customer_airtable_id: sessionSignal?._ss_customer_airtable_id,
+          _display_name: sessionSignal?._display_name,
+          _preview_url: sessionSignal?._preview_url,
+          _front_label_url: sessionSignal?._front_label_url,
+          _sku: sessionSignal?._sku,
+          bottle: sessionSignal?.bottle,
+          liquid: sessionSignal?.liquid,
+          closure: sessionSignal?.closure,
+          wax: sessionSignal?.wax,
+        },
+      });
       entry.quantity += normalizeOrderQuantity(sessionSignal?._quantity) || 0;
 
       getLinkedIds(savedConfigRecord, STUDIO_FIELDS.savedConfigurations.customer).forEach((id) => {
@@ -1012,6 +1230,22 @@ export const collectOrderSignals = async (orderPayload) => {
       front_version_ids: uniqueRecordIds(Array.from(entry.front_version_ids)),
       back_version_ids: uniqueRecordIds(Array.from(entry.back_version_ids)),
       session_ids: uniqueTextValues(Array.from(entry.session_ids), 255),
+      customer_airtable_id: normalizeRecordId(entry.customer_airtable_id),
+      display_name: normalizeText(entry.display_name, 255),
+      preview_url: sanitizeUrl(entry.preview_url) || null,
+      front_label_url: sanitizeUrl(entry.front_label_url) || null,
+      sku: normalizeText(entry.sku, 255),
+      bottle: normalizeText(entry.bottle, 120),
+      liquid: normalizeText(entry.liquid, 120),
+      closure: normalizeText(entry.closure, 120),
+      wax: normalizeText(entry.wax, 120),
+      product: normalizeText(entry.product, 255),
+      product_id: normalizeText(entry.product_id, 255),
+      variant_id: normalizeText(entry.variant_id, 255),
+      session_id:
+        normalizeText(entry.session_id, 255) ||
+        uniqueTextValues(Array.from(entry.session_ids), 255)[0] ||
+        null,
       quantity: normalizeOrderQuantity(entry.quantity) || null,
     })),
   };
@@ -1176,6 +1410,7 @@ export const createOrderRecordForSavedConfiguration = async ({
   savedConfigurationRecord = null,
   customerRecordIds = [],
   quantity = null,
+  lineItemMetadata = null,
 }) => {
   const savedConfigId = normalizeRecordId(savedConfigurationRecordId);
   if (!savedConfigId) return null;
@@ -1204,7 +1439,7 @@ export const createOrderRecordForSavedConfiguration = async ({
       linkedCustomerIds.length > 0 ? linkedCustomerIds : undefined,
     [STUDIO_FIELDS.orders.savedConfiguration]: [savedConfigId],
     [STUDIO_FIELDS.orders.orderStatus]: normalizedOrderStatus,
-    ...buildOrderSnapshotFields(savedConfigRecord, { quantity }),
+    ...buildOrderSnapshotFields(savedConfigRecord, { quantity, lineItemMetadata }),
   };
 
   const existingOrderRecord = Array.isArray(existingOrderRecords)
@@ -1218,4 +1453,141 @@ export const createOrderRecordForSavedConfiguration = async ({
   }
 
   return createResilient(STUDIO_TABLES.orders, {}, fields);
+};
+
+const buildOrderCustomerName = (order = {}) =>
+  pickText(
+    [order?.customer?.first_name, order?.customer?.last_name].filter(Boolean).join(" "),
+    [order?.billing_address?.firstName, order?.billing_address?.lastName]
+      .filter(Boolean)
+      .join(" "),
+    [order?.shipping_address?.firstName, order?.shipping_address?.lastName]
+      .filter(Boolean)
+      .join(" "),
+    order?.customer?.email,
+    order?.email
+  );
+
+const buildOrderShippingAddress = (order = {}) =>
+  pickText(
+    order?.shipping_address?.fullAddress,
+    order?.billing_address?.fullAddress
+  );
+
+export const buildShopifyOrderDetailsMetafieldPayload = ({
+  order = {},
+  orderStatus = null,
+  items = [],
+} = {}) => {
+  const normalizedItems = Array.isArray(items)
+    ? items.filter((item) => item && typeof item === "object")
+    : [];
+
+  return {
+    schema_version: SHOPIFY_ORDER_DETAILS_SCHEMA_VERSION,
+    synced_at: new Date().toISOString(),
+    order_id: pickText(order?.id),
+    order_name: pickText(order?.name),
+    order_status: normalizeOrderStatus(orderStatus) || pickText(orderStatus),
+    customer_name: buildOrderCustomerName(order),
+    shipping_address: buildOrderShippingAddress(order),
+    items: normalizedItems,
+  };
+};
+
+export const buildShopifyOrderDetailsItem = ({
+  order = {},
+  savedConfigurationRecordId,
+  savedConfigurationRecord,
+  orderRecordId = null,
+  customerRecordId = null,
+  signal = {},
+} = {}) => {
+  const savedConfigId = normalizeRecordId(savedConfigurationRecordId);
+  if (!savedConfigId || !savedConfigurationRecord?.id) return null;
+
+  const snapshotFields = buildOrderSnapshotFields(savedConfigurationRecord, {
+    quantity: signal?.quantity,
+    lineItemMetadata: signal,
+  });
+
+  return {
+    airtable_order_record_id: normalizeRecordId(orderRecordId),
+    saved_configuration_id: savedConfigId,
+    session_id:
+      pickText(
+        signal?.session_id,
+        snapshotFields[STUDIO_FIELDS.orders.sessionId]
+      ) || null,
+    airtable_customer_id:
+      normalizeRecordId(signal?.customer_airtable_id) ||
+      normalizeRecordId(customerRecordId),
+    order_id: pickText(order?.id),
+    customer_name: buildOrderCustomerName(order),
+    shipping_address: buildOrderShippingAddress(order),
+    product:
+      pickText(
+        signal?.product,
+        snapshotFields[STUDIO_FIELDS.orders.shopifyProduct]
+      ) || null,
+    product_id:
+      pickText(
+        signal?.product_id,
+        snapshotFields[STUDIO_FIELDS.orders.shopifyProductId]
+      ) || null,
+    variant_id:
+      pickText(
+        signal?.variant_id,
+        snapshotFields[STUDIO_FIELDS.orders.shopifyVariantId]
+      ) || null,
+    sku:
+      pickText(
+        signal?.sku,
+        snapshotFields[STUDIO_FIELDS.orders.internalSku]
+      ) || null,
+    quantity:
+      pickQuantity(
+        signal?.quantity,
+        snapshotFields[STUDIO_FIELDS.orders.quantity]
+      ) || null,
+    preview_image_url:
+      pickUrl(
+        signal?.preview_url,
+        snapshotFields[STUDIO_FIELDS.orders.previewImageUrl]
+      ) || null,
+    front_label_url:
+      pickUrl(
+        signal?.front_label_url,
+        snapshotFields[STUDIO_FIELDS.orders.frontLabelUrl]
+      ) || null,
+    front_label_version_id:
+      normalizeRecordId(signal?.front_version_ids?.[0]) || null,
+    back_label_version_id:
+      normalizeRecordId(signal?.back_version_ids?.[0]) || null,
+    display_name:
+      pickText(
+        signal?.display_name,
+        snapshotFields[STUDIO_FIELDS.orders.displayName]
+      ) || null,
+    bottle:
+      pickText(
+        signal?.bottle,
+        snapshotFields[STUDIO_FIELDS.orders.bottleSelection]
+      ) || null,
+    liquid:
+      pickText(
+        signal?.liquid,
+        snapshotFields[STUDIO_FIELDS.orders.liquidSelection]
+      ) || null,
+    closure:
+      pickText(
+        signal?.closure,
+        snapshotFields[STUDIO_FIELDS.orders.closureSelection]
+      ) || null,
+    wax:
+      pickText(
+        signal?.wax,
+        snapshotFields[STUDIO_FIELDS.orders.waxSelection]
+      ) || null,
+  };
 };

@@ -755,12 +755,17 @@ test("order record helper copies saved configuration snapshot fields into Orders
         assert.equal(fields[STUDIO_FIELDS.orders.closureSelection], "Wooden Cork");
         assert.equal(fields[STUDIO_FIELDS.orders.waxSelection], "Black");
         assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-123");
+        assert.equal(
+          fields[STUDIO_FIELDS.orders.shopifyProduct],
+          "Build Your Rum Brand"
+        );
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10243100311898");
         assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "445566778899");
         assert.equal(fields[STUDIO_FIELDS.orders.quantity], 3);
         assert.equal(
           fields[STUDIO_FIELDS.orders.configJson],
           JSON.stringify({
+            product_name: "Build Your Rum Brand",
             preview_url: "https://cdn.example.com/preview-image.png",
             selectedLabelVersion: {
               designSide: "front",
@@ -815,6 +820,7 @@ test("order record helper copies saved configuration snapshot fields into Orders
           [STUDIO_FIELDS.savedConfigurations.shopifyProductId]: "10243100311898",
           [STUDIO_FIELDS.savedConfigurations.shopifyVariantId]: "445566778899",
           [STUDIO_FIELDS.savedConfigurations.configJson]: JSON.stringify({
+            product_name: "Build Your Rum Brand",
             preview_url: "https://cdn.example.com/preview-image.png",
             selectedLabelVersion: {
               designSide: "front",
@@ -836,6 +842,99 @@ test("order record helper copies saved configuration snapshot fields into Orders
     });
 
     assert.equal(record?.id, "recOrderSnapshotA");
+    fetchMock.assertDone();
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("order record helper prefers Shopify line-item metadata over saved configuration fallbacks", async () => {
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Orders & Fulfilment",
+      assert: (call) => {
+        const formula = call.url.searchParams.get("filterByFormula") || "";
+        assert.equal(formula, "{Order ID}='7786446423111'");
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Orders & Fulfilment",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.orders.orderId], "7786446423111");
+        assert.equal(fields[STUDIO_FIELDS.orders.sessionId], "session-line-item");
+        assert.equal(fields[STUDIO_FIELDS.orders.displayName], "Order Display Name");
+        assert.equal(fields[STUDIO_FIELDS.orders.bottleSelection], "Signature");
+        assert.equal(fields[STUDIO_FIELDS.orders.liquidSelection], "Vodka");
+        assert.equal(fields[STUDIO_FIELDS.orders.closureSelection], "Gold Stopper");
+        assert.equal(fields[STUDIO_FIELDS.orders.waxSelection], "Emerald");
+        assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-LINE-ITEM");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyProduct], "Build Your Vodka Brand");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10243095429466");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "6677889900");
+        assert.equal(fields[STUDIO_FIELDS.orders.quantity], 2);
+        assert.equal(
+          fields[STUDIO_FIELDS.orders.previewImageUrl],
+          "https://cdn.example.com/preview-from-line-item.png"
+        );
+        assert.equal(
+          fields[STUDIO_FIELDS.orders.frontLabelUrl],
+          "https://cdn.example.com/front-from-line-item.png"
+        );
+      },
+      response: {
+        records: [{ id: "recOrderLineItemPreferred", fields: {} }],
+      },
+    },
+  ]);
+
+  try {
+    const record = await createOrderRecordForSavedConfiguration({
+      orderId: "7786446423111",
+      orderStatus: "Ordered",
+      savedConfigurationRecordId: "recSavedConfigLineItem",
+      savedConfigurationRecord: {
+        id: "recSavedConfigLineItem",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.sessionId]: "session-airtable",
+          [STUDIO_FIELDS.savedConfigurations.displayName]: "Fallback Display Name",
+          [STUDIO_FIELDS.savedConfigurations.bottleSelection]: "Fallback Bottle",
+          [STUDIO_FIELDS.savedConfigurations.liquidSelection]: "Fallback Liquid",
+          [STUDIO_FIELDS.savedConfigurations.closureSelection]: "Fallback Closure",
+          [STUDIO_FIELDS.savedConfigurations.waxSelection]: "Fallback Wax",
+          [STUDIO_FIELDS.savedConfigurations.internalSku]: "SKU-FALLBACK",
+          [STUDIO_FIELDS.savedConfigurations.shopifyProductId]: "11111111111111",
+          [STUDIO_FIELDS.savedConfigurations.shopifyVariantId]: "2222222222",
+          [STUDIO_FIELDS.savedConfigurations.configJson]: JSON.stringify({
+            product_name: "Fallback Product",
+            preview_url: "https://cdn.example.com/preview-fallback.png",
+          }),
+          [STUDIO_FIELDS.savedConfigurations.currentFrontLabelOutputImageUrl]:
+            "https://cdn.example.com/front-fallback.png",
+        },
+      },
+      customerRecordIds: ["recCanonicalCustomer"],
+      lineItemMetadata: {
+        session_id: "session-line-item",
+        display_name: "Order Display Name",
+        bottle: "Signature",
+        liquid: "Vodka",
+        closure: "Gold Stopper",
+        wax: "Emerald",
+        sku: "SKU-LINE-ITEM",
+        product: "Build Your Vodka Brand",
+        product_id: "10243095429466",
+        variant_id: "6677889900",
+        quantity: 2,
+        preview_url: "https://cdn.example.com/preview-from-line-item.png",
+        front_label_url: "https://cdn.example.com/front-from-line-item.png",
+      },
+    });
+
+    assert.equal(record?.id, "recOrderLineItemPreferred");
     fetchMock.assertDone();
   } finally {
     fetchMock.restore();
@@ -1471,6 +1570,358 @@ test("guest order with _saved_configuration_id claims the linked customer and en
     assert.deepEqual(res.body?.updated_saved_configurations, ["recSavedConfigA"]);
     fetchMock.assertDone();
   } finally {
+    fetchMock.restore();
+  }
+});
+
+test("orders/create writes Shopify order details metafield when admin token is configured", async () => {
+  const previousAdminToken = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+  process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = "shpat_test_admin_token";
+
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_order_metafield_sync_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookOrderMetafield1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigMeta",
+      response: {
+        id: "recSavedConfigMeta",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recCanonicalMetaCustomer"],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+          [STUDIO_FIELDS.savedConfigurations.displayName]: "Fallback Display",
+          [STUDIO_FIELDS.savedConfigurations.sessionId]: "session-fallback-meta",
+          [STUDIO_FIELDS.savedConfigurations.bottleSelection]: "Fallback Bottle",
+          [STUDIO_FIELDS.savedConfigurations.liquidSelection]: "Fallback Liquid",
+          [STUDIO_FIELDS.savedConfigurations.closureSelection]: "Fallback Closure",
+          [STUDIO_FIELDS.savedConfigurations.waxSelection]: "Fallback Wax",
+          [STUDIO_FIELDS.savedConfigurations.internalSku]: "SKU-FALLBACK-META",
+          [STUDIO_FIELDS.savedConfigurations.shopifyProductId]: "10197521465690",
+          [STUDIO_FIELDS.savedConfigurations.shopifyVariantId]: "555111222",
+          [STUDIO_FIELDS.savedConfigurations.previewImageUrl]:
+            "https://cdn.example.com/preview-fallback-meta.png",
+          [STUDIO_FIELDS.savedConfigurations.currentFrontLabelOutputImageUrl]:
+            "https://cdn.example.com/front-fallback-meta.png",
+          [STUDIO_FIELDS.savedConfigurations.configJson]: JSON.stringify({
+            product_name: "Fallback Product Meta",
+          }),
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Shopify ID}='9002')"
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recCanonicalMetaCustomer",
+            fields: {
+              "Shopify ID": "9002",
+              "First Name": "Marcus",
+              "Last Name": "Smith",
+              Source: "Shopify",
+              "Shop Domain": "wnbrmm-sg.myshopify.com",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigMeta",
+      response: {
+        id: "recSavedConfigMeta",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recCanonicalMetaCustomer"],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+          [STUDIO_FIELDS.savedConfigurations.displayName]: "Fallback Display",
+          [STUDIO_FIELDS.savedConfigurations.sessionId]: "session-fallback-meta",
+          [STUDIO_FIELDS.savedConfigurations.bottleSelection]: "Fallback Bottle",
+          [STUDIO_FIELDS.savedConfigurations.liquidSelection]: "Fallback Liquid",
+          [STUDIO_FIELDS.savedConfigurations.closureSelection]: "Fallback Closure",
+          [STUDIO_FIELDS.savedConfigurations.waxSelection]: "Fallback Wax",
+          [STUDIO_FIELDS.savedConfigurations.internalSku]: "SKU-FALLBACK-META",
+          [STUDIO_FIELDS.savedConfigurations.shopifyProductId]: "10197521465690",
+          [STUDIO_FIELDS.savedConfigurations.shopifyVariantId]: "555111222",
+          [STUDIO_FIELDS.savedConfigurations.previewImageUrl]:
+            "https://cdn.example.com/preview-fallback-meta.png",
+          [STUDIO_FIELDS.savedConfigurations.currentFrontLabelOutputImageUrl]:
+            "https://cdn.example.com/front-fallback-meta.png",
+          [STUDIO_FIELDS.savedConfigurations.configJson]: JSON.stringify({
+            product_name: "Fallback Product Meta",
+          }),
+        },
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "{Order ID}='7787000000001'"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.orders.displayName], "Custom Order Name");
+        assert.equal(fields[STUDIO_FIELDS.orders.bottleSelection], "Heritage");
+        assert.equal(fields[STUDIO_FIELDS.orders.liquidSelection], "Gin");
+        assert.equal(fields[STUDIO_FIELDS.orders.closureSelection], "Natural Cork");
+        assert.equal(fields[STUDIO_FIELDS.orders.waxSelection], "Crimson");
+        assert.equal(fields[STUDIO_FIELDS.orders.internalSku], "SKU-META-001");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyProduct], "Build Your Gin Brand");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyProductId], "10197521465690");
+        assert.equal(fields[STUDIO_FIELDS.orders.shopifyVariantId], "555111222");
+        assert.equal(fields[STUDIO_FIELDS.orders.quantity], 2);
+      },
+      response: { records: [{ id: "recOrderMeta1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.addresses,
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.addresses,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(
+          fields[STUDIO_FIELDS.addresses.fullAddress],
+          "Marcus Smith, 1 Test Street, London, SW1A 1AA, United Kingdom"
+        );
+        assert.deepEqual(fields[STUDIO_FIELDS.addresses.customer], [
+          "recCanonicalMetaCustomer",
+        ]);
+        assert.deepEqual(fields[STUDIO_FIELDS.addresses.orders], ["recOrderMeta1"]);
+      },
+      response: { records: [{ id: "recOrderMetaAddress1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigMeta",
+      response: {
+        id: "recSavedConfigMeta",
+        fields: {
+          [STUDIO_FIELDS.savedConfigurations.customer]: ["recCanonicalMetaCustomer"],
+          [STUDIO_FIELDS.savedConfigurations.labels]: [],
+          [STUDIO_FIELDS.savedConfigurations.labelVersions]: [],
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.savedConfigurations,
+      recordId: "recSavedConfigMeta",
+      response: { records: [{ id: "recSavedConfigMeta", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recFrontVersionMeta",
+      response: {
+        id: "recFrontVersionMeta",
+        fields: {
+          [STUDIO_FIELDS.labelVersions.designSide]: "Front",
+          [STUDIO_FIELDS.labelVersions.savedConfigurations]: [],
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recFrontVersionMeta",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.labelVersions.savedConfigurations], [
+          "recSavedConfigMeta",
+        ]);
+      },
+      response: { records: [{ id: "recFrontVersionMeta", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recBackVersionMeta",
+      response: {
+        id: "recBackVersionMeta",
+        fields: {
+          [STUDIO_FIELDS.labelVersions.designSide]: "Back",
+          [STUDIO_FIELDS.labelVersions.savedConfigurations]: [],
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.labelVersions,
+      recordId: "recBackVersionMeta",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.deepEqual(fields[STUDIO_FIELDS.labelVersions.savedConfigurations], [
+          "recSavedConfigMeta",
+        ]);
+      },
+      response: { records: [{ id: "recBackVersionMeta", fields: {} }] },
+    },
+    {
+      method: "POST",
+      assert: (call) => {
+        assert.equal(call.url.host, "wnbrmm-sg.myshopify.com");
+        assert.equal(call.url.pathname, "/admin/api/2025-07/graphql.json");
+        assert.equal(
+          call.headers["X-Shopify-Access-Token"],
+          "shpat_test_admin_token"
+        );
+        assert.match(call.body?.query || "", /metafieldsSet/);
+        const metafield = call.body?.variables?.metafields?.[0] || {};
+        assert.equal(metafield.ownerId, "gid://shopify/Order/7787000000001");
+        assert.equal(metafield.namespace, "ss");
+        assert.equal(metafield.key, "order_details");
+        assert.equal(metafield.type, "json");
+
+        const value = JSON.parse(metafield.value);
+        assert.equal(value.schema_version, 1);
+        assert.equal(value.order_id, "7787000000001");
+        assert.equal(value.customer_name, "Marcus Smith");
+        assert.equal(value.shipping_address, "Marcus Smith, 1 Test Street, London, SW1A 1AA, United Kingdom");
+        assert.equal(value.items.length, 1);
+        assert.deepEqual(value.items[0], {
+          airtable_order_record_id: "recOrderMeta1",
+          saved_configuration_id: "recSavedConfigMeta",
+          session_id: "session-meta-1",
+          airtable_customer_id: "recCanonicalMetaCustomer",
+          order_id: "7787000000001",
+          customer_name: "Marcus Smith",
+          shipping_address: "Marcus Smith, 1 Test Street, London, SW1A 1AA, United Kingdom",
+          product: "Build Your Gin Brand",
+          product_id: "10197521465690",
+          variant_id: "555111222",
+          sku: "SKU-META-001",
+          quantity: 2,
+          preview_image_url: "https://cdn.example.com/preview-meta.png",
+          front_label_url: "https://cdn.example.com/front-meta.png",
+          front_label_version_id: "recFrontVersionMeta",
+          back_label_version_id: "recBackVersionMeta",
+          display_name: "Custom Order Name",
+          bottle: "Heritage",
+          liquid: "Gin",
+          closure: "Natural Cork",
+          wax: "Crimson",
+        });
+      },
+      response: {
+        data: {
+          metafieldsSet: {
+            metafields: [{ id: "gid://shopify/Metafield/1", namespace: "ss", key: "order_details" }],
+            userErrors: [],
+          },
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookOrderMetafield1",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "processed");
+      },
+      response: { records: [{ id: "recWebhookOrderMetafield1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "orders/create",
+      webhookId: "wh_order_metafield_sync_1",
+      payload: {
+        id: 7787000000001,
+        name: "#1001",
+        customer: {
+          id: 9002,
+          first_name: "Marcus",
+          last_name: "Smith",
+        },
+        shipping_address: {
+          first_name: "Marcus",
+          last_name: "Smith",
+          address1: "1 Test Street",
+          city: "London",
+          zip: "SW1A 1AA",
+          country: "United Kingdom",
+        },
+        line_items: [
+          {
+            id: 1,
+            title: "Build Your Gin Brand",
+            sku: "SKU-SHOPIFY-FALLBACK",
+            product_id: 10197521465690,
+            variant_id: 555111222,
+            quantity: 2,
+            properties: [
+              { name: "_saved_configuration_id", value: "recSavedConfigMeta" },
+              { name: "_session_id", value: "session-meta-1" },
+              { name: "_ss_customer_airtable_id", value: "recCanonicalMetaCustomer" },
+              { name: "_display_name", value: "Custom Order Name" },
+              { name: "_preview_url", value: "https://cdn.example.com/preview-meta.png" },
+              { name: "_front_label_url", value: "https://cdn.example.com/front-meta.png" },
+              { name: "_sku", value: "SKU-META-001" },
+              { name: "_label_front_version_id", value: "recFrontVersionMeta" },
+              { name: "_label_back_version_id", value: "recBackVersionMeta" },
+              { name: "Bottle", value: "Heritage" },
+              { name: "Liquid", value: "Gin" },
+              { name: "Closure", value: "Natural Cork" },
+              { name: "Wax", value: "Crimson" },
+            ],
+          },
+        ],
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersCreate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.shopify_order_metafield_sync?.ok, true);
+    fetchMock.assertDone();
+  } finally {
+    if (previousAdminToken == null) {
+      delete process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+    } else {
+      process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = previousAdminToken;
+    }
     fetchMock.restore();
   }
 });
