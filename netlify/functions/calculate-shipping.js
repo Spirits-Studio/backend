@@ -28,8 +28,8 @@ const buildDebugSummary = ({ shipment, rate }) => ({
   grouped_units: shipment.groupedUnits,
   grouped_product_grams: shipment.groupedProductGrams,
   fallback_product_grams: shipment.fallbackProductGrams,
-  packaging_grams: shipment.packaging.grams,
-  packaging_breakdown: shipment.packaging.packages,
+  packaging_grams: shipment.packagingGrams,
+  catalogs: shipment.catalogs,
   total_grams: shipment.totalGrams,
 });
 

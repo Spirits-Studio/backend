@@ -1,9 +1,19 @@
-const DEFAULT_BOTTLE_WEIGHT_GRAMS = 1250;
 const DEFAULT_SERVICE_NAME = "Shipping";
 const DEFAULT_SERVICE_CODE = "shipping";
 const DEFAULT_DESCRIPTION = "Carrier-calculated shipping.";
+const DEFAULT_CURRENCY = "GBP";
 
-const packagingCache = new Map();
+const RESERVED_CATALOG_KEYS = new Set([
+  "name",
+  "type",
+  "catalog",
+  "products",
+  "items",
+  "rates",
+  "packagingByQuantity",
+  "packaging_by_quantity",
+  "packagingRules",
+]);
 
 const normalizeText = (value) => {
   if (value == null) return null;
@@ -33,6 +43,17 @@ const toNonNegativeInteger = (value) => {
   return number != null && number >= 0 ? number : null;
 };
 
+const toMoneySubunits = (value) => {
+  if (value == null || value === "") return null;
+  const normalized =
+    typeof value === "string"
+      ? value.replace(/[^0-9.-]/g, "")
+      : value;
+  const number = Number(normalized);
+  if (!Number.isFinite(number)) return null;
+  return Math.round(number * 100);
+};
+
 const createConfigError = (message) => {
   const error = new Error(message);
   error.code = "invalid_shipping_calculations";
@@ -48,7 +69,98 @@ const slugify = (value) =>
 
 const sortAscendingByMaxGrams = (left, right) => left.maxGrams - right.maxGrams;
 
-const normalizeRateTable = (value) => {
+const normalizePackagingTypes = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw createConfigError(
+      "SHOPIFY_SHIPPING_CALCULATIONS_JSON must include packagingTypes as an object."
+    );
+  }
+
+  const packagingTypes = {};
+
+  for (const [key, rawWeight] of Object.entries(value)) {
+    const name = normalizeText(key);
+    const grams = toPositiveInteger(rawWeight);
+    if (!name || !grams) continue;
+    packagingTypes[name] = grams;
+  }
+
+  if (!Object.keys(packagingTypes).length) {
+    throw createConfigError(
+      "SHOPIFY_SHIPPING_CALCULATIONS_JSON packagingTypes must include at least one package."
+    );
+  }
+
+  return packagingTypes;
+};
+
+const normalizePackagingRecipe = (value, packagingTypes, contextLabel) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw createConfigError(`${contextLabel} must include a packaging object.`);
+  }
+
+  const packaging = {};
+
+  for (const [key, rawCount] of Object.entries(value)) {
+    const packageName = normalizeText(key);
+    const count = toNonNegativeInteger(rawCount);
+    if (!packageName || !count) continue;
+
+    if (!Object.hasOwn(packagingTypes, packageName)) {
+      throw createConfigError(
+        `${contextLabel} references unknown packaging type "${packageName}".`
+      );
+    }
+
+    packaging[packageName] = count;
+  }
+
+  if (!Object.keys(packaging).length) {
+    throw createConfigError(`${contextLabel} must define at least one package count.`);
+  }
+
+  return packaging;
+};
+
+const normalizePackagingByQuantity = (value, packagingTypes, contextLabel) => {
+  const packagingByQuantity = new Map();
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const quantity = toPositiveInteger(entry?.quantity);
+      if (!quantity) continue;
+
+      const packaging = normalizePackagingRecipe(
+        entry?.packaging,
+        packagingTypes,
+        `${contextLabel} quantity ${quantity}`
+      );
+      packagingByQuantity.set(String(quantity), packaging);
+    }
+  } else if (value && typeof value === "object") {
+    for (const [rawQuantity, rawPackaging] of Object.entries(value)) {
+      const quantity = toPositiveInteger(rawQuantity);
+      if (!quantity) continue;
+
+      const packaging = normalizePackagingRecipe(
+        rawPackaging,
+        packagingTypes,
+        `${contextLabel} quantity ${quantity}`
+      );
+      packagingByQuantity.set(String(quantity), packaging);
+    }
+  }
+
+  if (!packagingByQuantity.size) {
+    throw createConfigError(
+      `${contextLabel} must include quantity-based packaging rules.`
+    );
+  }
+
+  return packagingByQuantity;
+};
+
+const normalizeRateTable = (value, contextLabel) => {
   if (!Array.isArray(value)) return [];
 
   return value
@@ -56,107 +168,62 @@ const normalizeRateTable = (value) => {
       const maxGrams = toPositiveInteger(
         entry?.maxGrams ?? entry?.upToGrams ?? entry?.weightToGrams
       );
-      const totalPrice = toNonNegativeInteger(
-        entry?.totalPrice ?? entry?.price ?? entry?.amountSubunits
-      );
-      if (!maxGrams || totalPrice == null) return null;
-      return { maxGrams, totalPrice };
+      const totalPriceSubunits =
+        toNonNegativeInteger(
+          entry?.totalPriceSubunits ??
+            entry?.priceSubunits ??
+            entry?.amountSubunits
+        ) ??
+        toMoneySubunits(entry?.totalPrice ?? entry?.price ?? entry?.amount);
+
+      if (!maxGrams || totalPriceSubunits == null) return null;
+      return { maxGrams, totalPriceSubunits };
     })
     .filter(Boolean)
     .sort(sortAscendingByMaxGrams);
 };
 
-const normalizeQuantityGroups = ({
-  rawGroups,
-  fallbackBottleWeightGrams,
-}) => {
-  const productIdToGroup = new Map();
-  const quantityGroups = [];
-
-  for (const rawGroup of rawGroups) {
-    const quantity = toPositiveInteger(
-      rawGroup?.quantity ?? rawGroup?.units ?? rawGroup?.packSize
+const normalizeCarrierRates = (value) => {
+  if (!Array.isArray(value) || !value.length) {
+    throw createConfigError(
+      "SHOPIFY_SHIPPING_CALCULATIONS_JSON must include carrierRates."
     );
-    const unitWeightGrams =
-      toPositiveInteger(rawGroup?.unitWeightGrams) || fallbackBottleWeightGrams;
-    const productIds = Array.isArray(rawGroup?.productIds)
-      ? rawGroup.productIds.map(normalizeId).filter(Boolean)
-      : [];
-
-    if (!quantity || !productIds.length) continue;
-
-    const group = {
-      quantity,
-      unitWeightGrams,
-      productIds,
-    };
-
-    for (const productId of productIds) {
-      if (productIdToGroup.has(productId)) {
-        throw createConfigError(
-          `Duplicate product id "${productId}" in SHOPIFY_SHIPPING_CALCULATIONS_JSON quantityGroups.`
-        );
-      }
-      productIdToGroup.set(productId, group);
-    }
-
-    quantityGroups.push(group);
   }
 
-  return { quantityGroups, productIdToGroup };
-};
+  const carrierRates = [];
 
-const normalizePackagingWeights = (value) => {
-  if (!Array.isArray(value)) return [];
-
-  return value
-    .map((entry) => {
-      const units = toPositiveInteger(
-        entry?.units ?? entry?.quantity ?? entry?.packSize
-      );
-      const grams = toPositiveInteger(entry?.grams ?? entry?.weightGrams);
-      if (!units || !grams) return null;
-      return { units, grams };
-    })
-    .filter(Boolean)
-    .sort((left, right) => left.units - right.units);
-};
-
-const normalizeServices = (source) => {
-  const rawServices =
-    Array.isArray(source?.services) && source.services.length
-      ? source.services
-      : [source];
-
-  const fallbackCurrency = normalizeText(source?.currency) || "GBP";
-  const fallbackCarrierName = normalizeText(source?.carrierName);
-  const services = [];
-
-  for (const rawService of rawServices) {
-    const rateTable = normalizeRateTable(
-      rawService?.rateTable ??
-        rawService?.rates ??
-        (rawService === source ? source?.rateTable ?? source?.rates : null)
-    );
-    if (!rateTable.length) continue;
-
-    const serviceName =
-      normalizeText(rawService?.serviceName ?? rawService?.name) ||
+  for (const entry of value) {
+    const carrierName =
+      normalizeText(entry?.carrierName ?? entry?.name ?? entry?.serviceName) ||
       DEFAULT_SERVICE_NAME;
-    const serviceCode =
-      normalizeText(rawService?.serviceCode ?? rawService?.code) ||
-      slugify(serviceName) ||
+    const carrierCode =
+      normalizeText(entry?.carrierCode ?? entry?.code ?? entry?.serviceCode) ||
+      slugify(carrierName) ||
       DEFAULT_SERVICE_CODE;
+    const serviceName =
+      normalizeText(entry?.serviceName) || carrierName;
+    const serviceCode =
+      normalizeText(entry?.serviceCode) || carrierCode;
     const description =
-      normalizeText(rawService?.description) ||
-      (fallbackCarrierName
-        ? `Rates via ${fallbackCarrierName}.`
-        : DEFAULT_DESCRIPTION);
+      normalizeText(entry?.description) ||
+      (carrierName ? `Rates via ${carrierName}.` : DEFAULT_DESCRIPTION);
     const currency =
-      normalizeText(rawService?.currency) || fallbackCurrency;
-    const phoneRequired = rawService?.phoneRequired === true;
+      normalizeText(entry?.currency) || DEFAULT_CURRENCY;
+    const phoneRequired = entry?.phoneRequired === true;
+    const rateTable = normalizeRateTable(
+      entry?.rateTable ?? entry?.rates,
+      carrierName
+    );
 
-    services.push({
+    if (!rateTable.length) {
+      throw createConfigError(
+        `carrierRates entry "${carrierName}" must include a rateTable.`
+      );
+    }
+
+    carrierRates.push({
+      carrierName,
+      carrierCode,
       serviceName,
       serviceCode,
       description,
@@ -166,8 +233,164 @@ const normalizeServices = (source) => {
     });
   }
 
-  return services;
+  return carrierRates;
 };
+
+const extractCatalogEntries = (value) => {
+  if (!value) return [];
+
+  if (!Array.isArray(value) && typeof value === "object") {
+    return Object.entries(value).map(([catalogName, config]) => ({
+      catalogName,
+      config,
+    }));
+  }
+
+  if (!Array.isArray(value)) return [];
+
+  const entries = [];
+
+  for (const rawEntry of value) {
+    if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      continue;
+    }
+
+    const explicitCatalogName = normalizeText(
+      rawEntry?.name ?? rawEntry?.type ?? rawEntry?.catalog
+    );
+    const explicitProducts = Array.isArray(rawEntry?.products)
+      ? rawEntry.products
+      : Array.isArray(rawEntry?.items)
+        ? rawEntry.items
+        : null;
+
+    if (explicitCatalogName && explicitProducts) {
+      entries.push({
+        catalogName: explicitCatalogName,
+        config: { ...rawEntry, products: explicitProducts },
+      });
+      continue;
+    }
+
+    const candidateKeys = Object.keys(rawEntry).filter(
+      (key) => !RESERVED_CATALOG_KEYS.has(key)
+    );
+
+    if (candidateKeys.length === 1) {
+      const candidateKey = candidateKeys[0];
+      const candidateValue = rawEntry[candidateKey];
+
+      if (Array.isArray(candidateValue)) {
+        entries.push({
+          catalogName: candidateKey,
+          config: { ...rawEntry, products: candidateValue },
+        });
+        continue;
+      }
+
+      if (candidateValue && typeof candidateValue === "object" && !Array.isArray(candidateValue)) {
+        entries.push({
+          catalogName: candidateKey,
+          config: candidateValue,
+        });
+      }
+    }
+  }
+
+  return entries;
+};
+
+const normalizeProducts = (value, catalogLabel) => {
+  if (!Array.isArray(value) || !value.length) {
+    throw createConfigError(`${catalogLabel} must include a product list.`);
+  }
+
+  return value
+    .map((entry) => {
+      const id = normalizeId(entry?.id ?? entry?.productId);
+      const name = normalizeText(entry?.name ?? entry?.title);
+      const unitWeightGrams = toPositiveInteger(
+        entry?.unitWeightGrams ?? entry?.weightGrams ?? entry?.weight ?? entry?.grams
+      );
+
+      if (!id || !unitWeightGrams) return null;
+
+      return {
+        id,
+        name: name || id,
+        unitWeightGrams,
+      };
+    })
+    .filter(Boolean);
+};
+
+const normalizeCatalogs = (value, packagingTypes) => {
+  const rawCatalogs = extractCatalogEntries(value);
+  if (!rawCatalogs.length) {
+    throw createConfigError(
+      "SHOPIFY_SHIPPING_CALCULATIONS_JSON must include calculations."
+    );
+  }
+
+  const catalogs = new Map();
+  const productIdToCatalog = new Map();
+
+  for (const { catalogName: rawCatalogName, config } of rawCatalogs) {
+    const catalogName = normalizeText(rawCatalogName);
+    if (!catalogName) continue;
+
+    const products = normalizeProducts(
+      config?.products ?? config?.items,
+      `calculations.${catalogName}`
+    );
+    const packagingByQuantity = normalizePackagingByQuantity(
+      config?.packagingByQuantity ??
+        config?.packaging_by_quantity ??
+        config?.rates ??
+        config?.packagingRules,
+      packagingTypes,
+      `calculations.${catalogName}`
+    );
+
+    const catalog = {
+      name: catalogName,
+      products,
+      packagingByQuantity,
+    };
+
+    catalogs.set(catalogName, catalog);
+
+    for (const product of products) {
+      if (productIdToCatalog.has(product.id)) {
+        throw createConfigError(
+          `Duplicate product id "${product.id}" found across calculations.`
+        );
+      }
+
+      productIdToCatalog.set(product.id, {
+        catalogName,
+        product,
+      });
+    }
+  }
+
+  if (!catalogs.size) {
+    throw createConfigError(
+      "SHOPIFY_SHIPPING_CALCULATIONS_JSON calculations did not produce any valid catalogs."
+    );
+  }
+
+  return {
+    catalogs,
+    productIdToCatalog,
+  };
+};
+
+const computePackagingGrams = (packaging, packagingTypes) =>
+  Object.entries(packaging).reduce((total, [packageName, count]) => {
+    const grams = packagingTypes[packageName] || 0;
+    return total + grams * count;
+  }, 0);
 
 export const resolveShippingCalculations = (rawValue) => {
   const rawText =
@@ -194,174 +417,34 @@ export const resolveShippingCalculations = (rawValue) => {
     );
   }
 
-  const bottleWeightGrams =
-    toPositiveInteger(parsed?.bottleWeightGrams) ||
-    DEFAULT_BOTTLE_WEIGHT_GRAMS;
-  const { quantityGroups, productIdToGroup } = normalizeQuantityGroups({
-    rawGroups:
-      parsed?.quantityGroups ??
-      parsed?.products ??
-      parsed?.productGroups ??
-      [],
-    fallbackBottleWeightGrams: bottleWeightGrams,
-  });
-  const packagingWeights = normalizePackagingWeights(
-    parsed?.packagingWeights ?? parsed?.packaging ?? []
+  const packagingTypes = normalizePackagingTypes(
+    parsed?.packagingTypes ?? parsed?.packaging_types
   );
-  const services = normalizeServices(parsed);
-
-  if (!quantityGroups.length) {
-    throw createConfigError(
-      "SHOPIFY_SHIPPING_CALCULATIONS_JSON must include quantityGroups with productIds."
-    );
-  }
-  if (!packagingWeights.length) {
-    throw createConfigError(
-      "SHOPIFY_SHIPPING_CALCULATIONS_JSON must include packagingWeights."
-    );
-  }
-  if (!services.length) {
-    throw createConfigError(
-      "SHOPIFY_SHIPPING_CALCULATIONS_JSON must include at least one rate table."
-    );
-  }
+  const carrierRates = normalizeCarrierRates(
+    parsed?.carrierRates ?? parsed?.carriers
+  );
+  const { catalogs, productIdToCatalog } = normalizeCatalogs(
+    parsed?.calculations ?? parsed?.catalogs,
+    packagingTypes
+  );
 
   return {
-    bottleWeightGrams,
-    quantityGroups,
-    productIdToGroup,
-    packagingWeights,
-    services,
-  };
-};
-
-const isBetterExactCandidate = (candidate, current) => {
-  if (!current) return true;
-  if (candidate.grams !== current.grams) return candidate.grams < current.grams;
-  return candidate.packageCount < current.packageCount;
-};
-
-const createPackagingCacheKey = (totalUnits, packagingWeights) =>
-  `${totalUnits}:${packagingWeights
-    .map((entry) => `${entry.units}:${entry.grams}`)
-    .join(",")}`;
-
-export const calculatePackaging = (totalUnits, packagingWeights) => {
-  if (!totalUnits) {
-    return {
-      grams: 0,
-      coveredUnits: 0,
-      packages: [],
-    };
-  }
-
-  const cacheKey = createPackagingCacheKey(totalUnits, packagingWeights);
-  const cached = packagingCache.get(cacheKey);
-  if (cached) return cached;
-
-  const maxPackageUnits = packagingWeights.reduce(
-    (current, entry) => Math.max(current, entry.units),
-    0
-  );
-  const limit = totalUnits + maxPackageUnits;
-  const dp = new Array(limit + 1).fill(null);
-  dp[0] = {
-    grams: 0,
-    packageCount: 0,
-    counts: new Array(packagingWeights.length).fill(0),
-  };
-
-  for (let coveredUnits = 1; coveredUnits <= limit; coveredUnits += 1) {
-    let best = null;
-
-    for (let index = 0; index < packagingWeights.length; index += 1) {
-      const packaging = packagingWeights[index];
-      const previous = coveredUnits - packaging.units;
-      if (previous < 0 || !dp[previous]) continue;
-
-      const counts = dp[previous].counts.slice();
-      counts[index] += 1;
-
-      const candidate = {
-        grams: dp[previous].grams + packaging.grams,
-        packageCount: dp[previous].packageCount + 1,
-        counts,
-      };
-
-      if (isBetterExactCandidate(candidate, best)) {
-        best = candidate;
-      }
-    }
-
-    dp[coveredUnits] = best;
-  }
-
-  let bestCoverage = null;
-  let bestState = null;
-  for (let coveredUnits = totalUnits; coveredUnits <= limit; coveredUnits += 1) {
-    const state = dp[coveredUnits];
-    if (!state) continue;
-
-    const isBetter =
-      !bestState ||
-      state.grams < bestState.grams ||
-      (state.grams === bestState.grams && coveredUnits < bestCoverage) ||
-      (state.grams === bestState.grams &&
-        coveredUnits === bestCoverage &&
-        state.packageCount < bestState.packageCount);
-
-    if (isBetter) {
-      bestCoverage = coveredUnits;
-      bestState = state;
-    }
-  }
-
-  if (!bestState) {
-    throw new Error("Unable to resolve packaging for the requested quantity.");
-  }
-
-  const result = {
-    grams: bestState.grams,
-    coveredUnits: bestCoverage,
-    packages: packagingWeights
-      .map((packaging, index) => {
-        const count = bestState.counts[index];
-        if (!count) return null;
-        return {
-          units: packaging.units,
-          grams: packaging.grams,
-          count,
-        };
-      })
-      .filter(Boolean)
-      .sort((left, right) => right.units - left.units),
-  };
-
-  packagingCache.set(cacheKey, result);
-  return result;
-};
-
-const findQuantityGroup = (item, calculations) => {
-  const productId = normalizeId(item?.product_id ?? item?.productId);
-  if (!productId) return null;
-  return calculations.productIdToGroup.get(productId) || null;
-};
-
-const calculateMatchedItemWeight = (item, group, lineQuantity) => {
-  const unitsForLine = group.quantity * lineQuantity;
-  return {
-    unitsForLine,
-    gramsForLine: unitsForLine * group.unitWeightGrams,
+    packagingTypes,
+    carrierRates,
+    catalogs,
+    productIdToCatalog,
   };
 };
 
 export const calculateShipment = ({ rate, calculations }) => {
   const items = Array.isArray(rate?.items) ? rate.items : [];
+  const catalogTotals = new Map();
 
+  let hasShippableItems = false;
   let groupedUnits = 0;
   let groupedProductGrams = 0;
   let fallbackProductGrams = 0;
-  let hasShippableItems = false;
+  let packagingGrams = 0;
 
   for (const item of items) {
     if (item?.requires_shipping === false) continue;
@@ -371,56 +454,92 @@ export const calculateShipment = ({ rate, calculations }) => {
 
     hasShippableItems = true;
 
-    const quantityGroup = findQuantityGroup(item, calculations);
-    if (quantityGroup) {
-      const matched = calculateMatchedItemWeight(
-        item,
-        quantityGroup,
-        lineQuantity
-      );
-      groupedUnits += matched.unitsForLine;
-      groupedProductGrams += matched.gramsForLine;
+    const productId = normalizeId(item?.product_id ?? item?.productId);
+    const match = productId ? calculations.productIdToCatalog.get(productId) : null;
+
+    if (!match) {
+      const gramsPerItem = toNonNegativeInteger(item?.grams) || 0;
+      fallbackProductGrams += gramsPerItem * lineQuantity;
       continue;
     }
 
-    const gramsPerItem = toNonNegativeInteger(item?.grams) || 0;
-    fallbackProductGrams += gramsPerItem * lineQuantity;
+    const key = match.catalogName;
+    const current = catalogTotals.get(key) || {
+      catalogName: key,
+      quantity: 0,
+      productGrams: 0,
+    };
+
+    current.quantity += lineQuantity;
+    current.productGrams += match.product.unitWeightGrams * lineQuantity;
+    catalogTotals.set(key, current);
   }
 
-  const packaging = calculatePackaging(groupedUnits, calculations.packagingWeights);
+  const catalogs = [];
+
+  for (const catalogTotal of catalogTotals.values()) {
+    const catalogConfig = calculations.catalogs.get(catalogTotal.catalogName);
+    const packaging =
+      catalogConfig?.packagingByQuantity.get(String(catalogTotal.quantity)) || null;
+
+    if (!packaging) {
+      throw new Error(
+        `No packaging rule configured for catalog "${catalogTotal.catalogName}" quantity ${catalogTotal.quantity}.`
+      );
+    }
+
+    const catalogPackagingGrams = computePackagingGrams(
+      packaging,
+      calculations.packagingTypes
+    );
+
+    groupedUnits += catalogTotal.quantity;
+    groupedProductGrams += catalogTotal.productGrams;
+    packagingGrams += catalogPackagingGrams;
+
+    catalogs.push({
+      catalog: catalogTotal.catalogName,
+      quantity: catalogTotal.quantity,
+      productGrams: catalogTotal.productGrams,
+      packaging,
+      packagingGrams: catalogPackagingGrams,
+    });
+  }
+
   const totalGrams =
-    groupedProductGrams + fallbackProductGrams + packaging.grams;
+    groupedProductGrams + fallbackProductGrams + packagingGrams;
 
   return {
     hasShippableItems,
     groupedUnits,
     groupedProductGrams,
     fallbackProductGrams,
-    packaging,
+    packagingGrams,
+    catalogs,
     totalGrams,
   };
 };
 
-const findRateBracket = (service, totalGrams) =>
-  service.rateTable.find((entry) => totalGrams <= entry.maxGrams) || null;
+const findRateBracket = (carrierRate, totalGrams) =>
+  carrierRate.rateTable.find((entry) => totalGrams <= entry.maxGrams) || null;
 
 export const buildCarrierRates = ({ rate, calculations }) => {
   const shipment = calculateShipment({ rate, calculations });
 
-  const rates = calculations.services
-    .map((service) => {
-      const matchedBracket = findRateBracket(service, shipment.totalGrams);
+  const rates = calculations.carrierRates
+    .map((carrierRate) => {
+      const matchedBracket = findRateBracket(carrierRate, shipment.totalGrams);
       if (!matchedBracket) return null;
 
       const response = {
-        service_name: service.serviceName,
-        service_code: service.serviceCode,
-        description: service.description,
-        total_price: String(matchedBracket.totalPrice),
-        currency: service.currency,
+        service_name: carrierRate.serviceName,
+        service_code: carrierRate.serviceCode,
+        description: carrierRate.description,
+        total_price: String(matchedBracket.totalPriceSubunits),
+        currency: carrierRate.currency,
       };
 
-      if (service.phoneRequired) {
+      if (carrierRate.phoneRequired) {
         response.phone_required = true;
       }
 
