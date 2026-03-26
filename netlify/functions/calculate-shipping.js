@@ -64,6 +64,19 @@ export default async (arg) => {
     });
   }
 
+  console.log(
+    "[calculate-shipping] request received",
+    JSON.stringify({
+      destination: {
+        country: rate?.destination?.country || null,
+        province: rate?.destination?.province ?? rate?.destination?.state ?? null,
+        postal_code: rate?.destination?.postal_code ?? rate?.destination?.zip ?? null,
+      },
+      item_count: rate.items.length,
+      currency: rate?.currency || null,
+    })
+  );
+
   let calculations;
   try {
     calculations = resolveShippingCalculations(

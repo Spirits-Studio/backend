@@ -11,6 +11,7 @@
     "build": "echo \"skip build\"",
     "build:functions": "netlify functions:build",
     "check:studio-schema": "node scripts/check-studio-airtable-schema.mjs",
+    "register:carrier-service": "node scripts/register-carrier-service.mjs",
     "backfill:studio-session-id": "node scripts/backfill-studio-session-id.mjs",
     "deploy": "netlify deploy --prod"
   },
