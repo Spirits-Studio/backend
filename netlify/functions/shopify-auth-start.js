@@ -7,7 +7,9 @@ export default async (event) => {
 
     const shop = process.env.SHOPIFY_STORE_DOMAIN; // e.g. wnbrmm-sg.myshopify.com
     const clientId = process.env.SHOPIFY_CLIENT_ID;
-    const scopes = process.env.SHOPIFY_OAUTH_SCOPES || "read_products";
+    const scopes =
+      process.env.SHOPIFY_OAUTH_SCOPES ||
+      "read_products,read_orders,read_customers,write_orders,write_draft_orders,write_shipping";
     const host = event.headers.host;
 
     if (!shop || !clientId) {
