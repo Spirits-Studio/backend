@@ -23,20 +23,73 @@ import {
   buildShopifyOrderDetailsMetafieldPayload,
   upsertBillingAddressForOrder,
 } from "./_lib/shopifyWebhookStudio.js";
-import { setShopifyOrderDetailsMetafield } from "./_lib/shopifyAdmin.js";
+import {
+  setShopifyOrderComplianceMetafield,
+  setShopifyOrderDetailsMetafield,
+} from "./_lib/shopifyAdmin.js";
+import {
+  buildOrderComplianceMetafieldPayload,
+  parseComplianceNoteAttributes,
+} from "./_lib/compliance.js";
 import {
   STUDIO_FIELDS,
   STUDIO_TABLES,
+  createResilient,
   getLinkedIds,
   getRecordOrNull,
+  listAllRecords,
   normalizeRecordId,
   resolveCustomerCreationSource,
+  updateResilient,
 } from "./_lib/studio.js";
 
 const toOrderIdString = (orderId) => {
   if (orderId == null) return null;
   const text = String(orderId).trim();
   return text || null;
+};
+
+const escapeFormulaValue = (value) =>
+  String(value || "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+const upsertComplianceOrderRecords = async ({
+  orderId,
+  orderStatus,
+  customerRecordId = null,
+  forResale,
+}) => {
+  const normalizedOrderId = toOrderIdString(orderId);
+  if (!normalizedOrderId || typeof forResale !== "boolean") return [];
+
+  const existingOrderRecords = await listAllRecords(STUDIO_TABLES.orders, {
+    filterByFormula: `{${STUDIO_FIELDS.orders.orderId}}='${escapeFormulaValue(
+      normalizedOrderId
+    )}'`,
+    maxRecords: 25,
+  });
+
+  const fields = {
+    [STUDIO_FIELDS.orders.orderId]: normalizedOrderId,
+    [STUDIO_FIELDS.orders.orderStatus]: orderStatus || "Ordered",
+    [STUDIO_FIELDS.orders.forResale]: forResale,
+    ...(customerRecordId
+      ? {
+          [STUDIO_FIELDS.orders.customer]: [customerRecordId],
+        }
+      : {}),
+  };
+
+  if (Array.isArray(existingOrderRecords) && existingOrderRecords.length > 0) {
+    const updatedIds = [];
+    for (const record of existingOrderRecords) {
+      const updated = await updateResilient(STUDIO_TABLES.orders, record.id, {}, fields);
+      if (updated?.id) updatedIds.push(updated.id);
+    }
+    return updatedIds;
+  }
+
+  const created = await createResilient(STUDIO_TABLES.orders, {}, fields);
+  return created?.id ? [created.id] : [];
 };
 
 export const createShopifyWebhookOrdersHandler = ({
@@ -156,10 +209,22 @@ export const createShopifyWebhookOrdersHandler = ({
     }
 
     try {
+      const complianceState = parseComplianceNoteAttributes(envelope.payload || {});
       const signals = await collectOrderSignals(envelope.payload || {});
+      const hasAuthenticatedShopifyCustomer = Boolean(order?.customer?.shopify_id);
       const preferredCustomerRecordIds = Array.isArray(signals?.customerRecordIds)
         ? signals.customerRecordIds
         : [];
+      const complianceCustomerRecordId = normalizeRecordId(
+        complianceState.customer_airtable_id
+      );
+      if (
+        complianceCustomerRecordId &&
+        !hasAuthenticatedShopifyCustomer &&
+        !preferredCustomerRecordIds.includes(complianceCustomerRecordId)
+      ) {
+        preferredCustomerRecordIds.unshift(complianceCustomerRecordId);
+      }
 
       const canonicalCustomer = await upsertCanonicalCustomer({
         shopifyId: order?.customer?.shopify_id,
@@ -249,6 +314,19 @@ export const createShopifyWebhookOrdersHandler = ({
         }
       }
 
+      const resolvedComplianceCustomerRecordId = hasAuthenticatedShopifyCustomer
+        ? canonicalCustomerRecordId || null
+        : complianceCustomerRecordId || canonicalCustomerRecordId || null;
+      const complianceOrderRecordIds =
+        complianceState.profile?.for_resale == null
+          ? []
+          : await upsertComplianceOrderRecords({
+              orderId: toOrderIdString(order?.id),
+              orderStatus,
+              customerRecordId: resolvedComplianceCustomerRecordId,
+              forResale: complianceState.profile.for_resale,
+            });
+
       const shopifyOrderMetafieldPayload = buildShopifyOrderDetailsMetafieldPayload({
         order,
         orderStatus,
@@ -267,6 +345,24 @@ export const createShopifyWebhookOrdersHandler = ({
               reason: "no_supported_order_items",
             };
 
+      const shopifyOrderComplianceMetafieldSync =
+        complianceState.profile?.for_resale == null
+          ? {
+              ok: false,
+              skipped: true,
+              reason: "no_compliance_attributes",
+            }
+          : await setShopifyOrderComplianceMetafield({
+              shopDomain: envelope?.shop_domain,
+              orderId: toOrderIdString(order?.id),
+              payload: buildOrderComplianceMetafieldPayload({
+                order,
+                customerRecordId: resolvedComplianceCustomerRecordId,
+                sessionId: complianceState.session_id,
+                profile: complianceState.profile,
+              }),
+            });
+
       const responsePayload = {
         ok: true,
         topic: envelope.topic || expectedTopic || null,
@@ -275,8 +371,10 @@ export const createShopifyWebhookOrdersHandler = ({
         canonical_customer_record_id: canonicalCustomerRecordId,
         updated_saved_configurations: Array.from(new Set(touchedConfigIds)),
         created_order_records: Array.from(new Set(createdOrderRecordIds)),
+        compliance_order_records: Array.from(new Set(complianceOrderRecordIds)),
         linked_address_records: Array.from(new Set(linkedAddressRecordIds)),
         shopify_order_metafield_sync: shopifyOrderMetafieldSync,
+        shopify_order_compliance_metafield_sync: shopifyOrderComplianceMetafieldSync,
         idempotent_skip: false,
         status: "processed",
       };

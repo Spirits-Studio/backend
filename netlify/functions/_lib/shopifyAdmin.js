@@ -4,6 +4,16 @@ const DEFAULT_ORDER_DETAILS_METAFIELD_NAMESPACE =
   process.env.SHOPIFY_ORDER_DETAILS_METAFIELD_NAMESPACE || "ss";
 const DEFAULT_ORDER_DETAILS_METAFIELD_KEY =
   process.env.SHOPIFY_ORDER_DETAILS_METAFIELD_KEY || "order_details";
+const DEFAULT_ORDER_COMPLIANCE_METAFIELD_NAMESPACE =
+  process.env.SHOPIFY_ORDER_COMPLIANCE_METAFIELD_NAMESPACE || "ss";
+const DEFAULT_ORDER_COMPLIANCE_METAFIELD_KEY =
+  process.env.SHOPIFY_ORDER_COMPLIANCE_METAFIELD_KEY || "compliance";
+const DEFAULT_CUSTOMER_METAFIELD_NAMESPACE =
+  process.env.SHOPIFY_CUSTOMER_METAFIELD_NAMESPACE || "SS";
+const DEFAULT_CUSTOMER_AIRTABLE_ID_METAFIELD_KEY =
+  process.env.SHOPIFY_CUSTOMER_AIRTABLE_ID_METAFIELD_KEY || "airtable_id";
+const DEFAULT_CUSTOMER_COMPLIANCE_METAFIELD_KEY =
+  process.env.SHOPIFY_CUSTOMER_COMPLIANCE_METAFIELD_KEY || "compliance_profile";
 
 const normalizeText = (value, maxLen = 255) => {
   if (value == null) return null;
@@ -49,6 +59,15 @@ const toOrderGid = (orderId) => {
     return normalizedOrderId;
   }
   return `gid://shopify/Order/${normalizedOrderId}`;
+};
+
+const toCustomerGid = (customerId) => {
+  const normalizedCustomerId = normalizeText(customerId, 255);
+  if (!normalizedCustomerId) return null;
+  if (normalizedCustomerId.startsWith("gid://shopify/Customer/")) {
+    return normalizedCustomerId;
+  }
+  return `gid://shopify/Customer/${normalizedCustomerId}`;
 };
 
 const parseJsonResponse = async (response) => {
@@ -337,11 +356,61 @@ export const setShopifyOrderDetailsMetafield = async ({
     return { ok: false, skipped: true, reason: "missing_order_id" };
   }
 
+  const result = await setShopifyMetafields({
+    shopDomain: normalizedShopDomain,
+    metafields: [
+      {
+        ownerId,
+        namespace,
+        key,
+        type: "json",
+        value: JSON.stringify(payload || {}),
+      },
+    ],
+    accessToken,
+    apiVersion,
+  });
+
+  return {
+    ...result,
+    ownerId,
+    namespace,
+    key,
+    metafieldId: result?.metafields?.[0]?.id || null,
+  };
+};
+
+export const setShopifyMetafields = async ({
+  shopDomain,
+  metafields = [],
+  accessToken = null,
+  apiVersion = DEFAULT_ADMIN_API_VERSION,
+} = {}) => {
+  const normalizedShopDomain = normalizeShopDomain(shopDomain);
+  if (!normalizedShopDomain) {
+    return { ok: false, skipped: true, reason: "missing_shop_domain" };
+  }
+
+  const normalizedMetafields = Array.isArray(metafields)
+    ? metafields.filter(
+        (entry) =>
+          entry?.ownerId &&
+          entry?.namespace &&
+          entry?.key &&
+          entry?.type &&
+          typeof entry?.value === "string"
+      )
+    : [];
+  if (!normalizedMetafields.length) {
+    return { ok: false, skipped: true, reason: "missing_metafields" };
+  }
+
   const query = `
-    mutation SetOrderDetailsMetafield($metafields: [MetafieldsSetInput!]!) {
+    mutation SetMetafields($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields {
           id
+          ownerType
           namespace
           key
         }
@@ -354,25 +423,14 @@ export const setShopifyOrderDetailsMetafield = async ({
     }
   `;
 
-  const variables = {
-    metafields: [
-      {
-        ownerId,
-        namespace,
-        key,
-        type: "json",
-        value: JSON.stringify(payload || {}),
-      },
-    ],
-  };
-
   const result = await shopifyAdminGraphql({
     shopDomain: normalizedShopDomain,
     query,
-    variables,
+    variables: { metafields: normalizedMetafields },
     accessToken,
     apiVersion,
   });
+  if (!result?.ok) return result;
 
   const userErrors = Array.isArray(result?.data?.metafieldsSet?.userErrors)
     ? result.data.metafieldsSet.userErrors
@@ -387,14 +445,173 @@ export const setShopifyOrderDetailsMetafield = async ({
     throw error;
   }
 
-  const metafield = result?.data?.metafieldsSet?.metafields?.[0] || null;
+  return {
+    ok: true,
+    skipped: false,
+    metafields: Array.isArray(result?.data?.metafieldsSet?.metafields)
+      ? result.data.metafieldsSet.metafields
+      : [],
+  };
+};
+
+export const setShopifyOrderComplianceMetafield = async ({
+  shopDomain,
+  orderId,
+  payload,
+  accessToken = null,
+  apiVersion = DEFAULT_ADMIN_API_VERSION,
+  namespace = DEFAULT_ORDER_COMPLIANCE_METAFIELD_NAMESPACE,
+  key = DEFAULT_ORDER_COMPLIANCE_METAFIELD_KEY,
+} = {}) => {
+  const ownerId = toOrderGid(orderId);
+  if (!ownerId) {
+    return { ok: false, skipped: true, reason: "missing_order_id" };
+  }
+
+  const result = await setShopifyMetafields({
+    shopDomain,
+    metafields: [
+      {
+        ownerId,
+        namespace,
+        key,
+        type: "json",
+        value: JSON.stringify(payload || {}),
+      },
+    ],
+    accessToken,
+    apiVersion,
+  });
+
+  return {
+    ...result,
+    ownerId,
+    namespace,
+    key,
+    metafieldId: result?.metafields?.[0]?.id || null,
+  };
+};
+
+export const getShopifyCustomerComplianceMetafields = async ({
+  shopDomain,
+  customerId,
+  accessToken = null,
+  apiVersion = DEFAULT_ADMIN_API_VERSION,
+  namespace = DEFAULT_CUSTOMER_METAFIELD_NAMESPACE,
+  airtableIdKey = DEFAULT_CUSTOMER_AIRTABLE_ID_METAFIELD_KEY,
+  complianceKey = DEFAULT_CUSTOMER_COMPLIANCE_METAFIELD_KEY,
+} = {}) => {
+  const normalizedShopDomain = normalizeShopDomain(shopDomain);
+  if (!normalizedShopDomain) {
+    return { ok: false, skipped: true, reason: "missing_shop_domain" };
+  }
+
+  const ownerId = toCustomerGid(customerId);
+  if (!ownerId) {
+    return { ok: false, skipped: true, reason: "missing_customer_id" };
+  }
+
+  const query = `
+    query GetCustomerComplianceMetafields(
+      $id: ID!
+      $namespace: String!
+      $airtableIdKey: String!
+      $complianceKey: String!
+    ) {
+      customer(id: $id) {
+        id
+        airtableId: metafield(namespace: $namespace, key: $airtableIdKey) {
+          value
+        }
+        complianceProfile: metafield(namespace: $namespace, key: $complianceKey) {
+          value
+        }
+      }
+    }
+  `;
+
+  const result = await shopifyAdminGraphql({
+    shopDomain: normalizedShopDomain,
+    query,
+    variables: {
+      id: ownerId,
+      namespace,
+      airtableIdKey,
+      complianceKey,
+    },
+    accessToken,
+    apiVersion,
+  });
+  if (!result?.ok) return result;
+
+  const customer = result?.data?.customer || null;
+  let complianceProfile = null;
+  try {
+    complianceProfile = customer?.complianceProfile?.value
+      ? JSON.parse(customer.complianceProfile.value)
+      : null;
+  } catch {
+    complianceProfile = null;
+  }
 
   return {
     ok: true,
     skipped: false,
     ownerId,
-    namespace,
-    key,
-    metafieldId: metafield?.id || null,
+    airtableId: normalizeText(customer?.airtableId?.value, 255),
+    complianceProfile:
+      complianceProfile && typeof complianceProfile === "object"
+        ? complianceProfile
+        : null,
   };
+};
+
+export const setShopifyCustomerComplianceMetafields = async ({
+  shopDomain,
+  customerId,
+  airtableId = null,
+  profile = null,
+  accessToken = null,
+  apiVersion = DEFAULT_ADMIN_API_VERSION,
+  namespace = DEFAULT_CUSTOMER_METAFIELD_NAMESPACE,
+  airtableIdKey = DEFAULT_CUSTOMER_AIRTABLE_ID_METAFIELD_KEY,
+  complianceKey = DEFAULT_CUSTOMER_COMPLIANCE_METAFIELD_KEY,
+} = {}) => {
+  const ownerId = toCustomerGid(customerId);
+  if (!ownerId) {
+    return { ok: false, skipped: true, reason: "missing_customer_id" };
+  }
+
+  const metafields = [];
+  const normalizedAirtableId = normalizeText(airtableId, 255);
+  if (normalizedAirtableId) {
+    metafields.push({
+      ownerId,
+      namespace,
+      key: airtableIdKey,
+      type: "single_line_text_field",
+      value: normalizedAirtableId,
+    });
+  }
+
+  if (profile && typeof profile === "object") {
+    metafields.push({
+      ownerId,
+      namespace,
+      key: complianceKey,
+      type: "json",
+      value: JSON.stringify(profile),
+    });
+  }
+
+  if (!metafields.length) {
+    return { ok: false, skipped: true, reason: "missing_metafields" };
+  }
+
+  return setShopifyMetafields({
+    shopDomain,
+    metafields,
+    accessToken,
+    apiVersion,
+  });
 };

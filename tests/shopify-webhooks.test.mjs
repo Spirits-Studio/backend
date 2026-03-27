@@ -1883,6 +1883,360 @@ test("orders/create writes Shopify order details metafield when admin token is c
   }
 });
 
+test("orders/create writes compliance metadata for non-studio orders", async () => {
+  const previousAdminToken = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+  process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = "shpat_test_admin_token";
+
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_order_compliance_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookOrderCompliance1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      recordId: "recComplianceCustomer1",
+      response: {
+        id: "recComplianceCustomer1",
+        fields: {
+          "Shopify ID": "",
+          Email: "",
+          "First Name": "",
+          "Last Name": "",
+          Source: "Direct",
+          "Shop Domain": "",
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: STUDIO_TABLES.customers,
+      recordId: "recComplianceCustomer1",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Email, "trade@example.com");
+        assert.equal(fields["First Name"], "Trade");
+        assert.equal(fields["Last Name"], "Buyer");
+        assert.equal(fields.Source, "Shopify");
+        assert.equal(fields["Shop Domain"], "wnbrmm-sg.myshopify.com");
+      },
+      response: { records: [{ id: "recComplianceCustomer1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "{Order ID}='8899000011112'"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.orders.orderId], "8899000011112");
+        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Ordered");
+        assert.equal(fields[STUDIO_FIELDS.orders.forResale], true);
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], [
+          "recComplianceCustomer1",
+        ]);
+      },
+      response: { records: [{ id: "recComplianceOrder1", fields: {} }] },
+    },
+    {
+      method: "POST",
+      assert: (call) => {
+        assert.equal(call.url.host, "wnbrmm-sg.myshopify.com");
+        assert.equal(call.url.pathname, "/admin/api/2025-07/graphql.json");
+        const metafield = call.body?.variables?.metafields?.[0] || {};
+        assert.equal(metafield.ownerId, "gid://shopify/Order/8899000011112");
+        assert.equal(metafield.namespace, "ss");
+        assert.equal(metafield.key, "compliance");
+        assert.equal(metafield.type, "json");
+
+        const value = JSON.parse(metafield.value);
+        assert.equal(value.order_id, "8899000011112");
+        assert.equal(value.customer_airtable_id, "recComplianceCustomer1");
+        assert.equal(value.session_id, "session-compliance-1");
+        assert.equal(value.for_resale, true);
+        assert.equal(value.premise_licence, "PL-123");
+        assert.equal(value.alcohol_licence, "AL-456");
+        assert.equal(value.licence_type, "personal");
+        assert.equal(value.personal_licence, "PERSONAL-789");
+        assert.equal(value.is_business_purchase, true);
+        assert.equal(value.company_name, "Spirits Studio Trade Ltd");
+        assert.equal(value.trading_name, "SS Trade");
+        assert.equal(value.company_number, "12345678");
+        assert.equal(value.vat_number, "GB123456789");
+      },
+      response: {
+        data: {
+          metafieldsSet: {
+            metafields: [{ id: "gid://shopify/Metafield/2", namespace: "ss", key: "compliance" }],
+            userErrors: [],
+          },
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookOrderCompliance1",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "processed");
+      },
+      response: { records: [{ id: "recWebhookOrderCompliance1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "orders/create",
+      webhookId: "wh_order_compliance_1",
+      payload: {
+        id: 8899000011112,
+        name: "#1002",
+        email: "trade@example.com",
+        billing_address: {
+          first_name: "Trade",
+          last_name: "Buyer",
+          address1: "2 Market Road",
+          city: "London",
+          zip: "SE1 1AA",
+          country: "United Kingdom",
+        },
+        note_attributes: [
+          { name: "_ss_for_resale", value: "true" },
+          { name: "_ss_premise_licence", value: "PL-123" },
+          { name: "_ss_alcohol_licence", value: "AL-456" },
+          { name: "_ss_licence_type", value: "personal" },
+          { name: "_ss_personal_licence", value: "PERSONAL-789" },
+          { name: "_ss_is_business_purchase", value: "true" },
+          { name: "_ss_company_name", value: "Spirits Studio Trade Ltd" },
+          { name: "_ss_trading_name", value: "SS Trade" },
+          { name: "_ss_company_number", value: "12345678" },
+          { name: "_ss_vat_number", value: "GB123456789" },
+          { name: "_ss_customer_airtable_id", value: "recComplianceCustomer1" },
+          { name: "_ss_session_id", value: "session-compliance-1" },
+        ],
+        line_items: [
+          {
+            id: 1,
+            title: "Trade Order",
+            product_id: 555,
+            variant_id: 777,
+            quantity: 30,
+            properties: [],
+          },
+        ],
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersCreate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.deepEqual(res.body?.compliance_order_records, ["recComplianceOrder1"]);
+    assert.equal(res.body?.shopify_order_metafield_sync?.skipped, true);
+    assert.equal(res.body?.shopify_order_compliance_metafield_sync?.ok, true);
+    fetchMock.assertDone();
+  } finally {
+    if (previousAdminToken == null) {
+      delete process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+    } else {
+      process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = previousAdminToken;
+    }
+    fetchMock.restore();
+  }
+});
+
+test("orders/create ignores stale compliance customer ids for signed-in customers", async () => {
+  const previousAdminToken = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+  process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = "shpat_test_admin_token";
+
+  const fetchMock = installFetchSequence([
+    {
+      method: "GET",
+      table: "Webhook Events",
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "({Webhook ID}='wh_order_compliance_signed_in_1')"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: "Webhook Events",
+      response: { records: [{ id: "recWebhookOrderComplianceSignedIn1", fields: {} }] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.match(
+          call.url.searchParams.get("filterByFormula") || "",
+          /\{Email\}/
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.customers,
+      assert: (call) => {
+        assert.match(
+          call.url.searchParams.get("filterByFormula") || "",
+          /\{Shopify ID\}='9111'/
+        );
+      },
+      response: {
+        records: [
+          {
+            id: "recSignedInComplianceCustomer1",
+            fields: {
+              "Shopify ID": "9111",
+              Email: "signedin@example.com",
+              "First Name": "Signed",
+              "Last Name": "Buyer",
+              Source: "Shopify",
+              "Shop Domain": "wnbrmm-sg.myshopify.com",
+            },
+          },
+        ],
+      },
+    },
+    {
+      method: "GET",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        assert.equal(
+          call.url.searchParams.get("filterByFormula"),
+          "{Order ID}='8899000011113'"
+        );
+      },
+      response: { records: [] },
+    },
+    {
+      method: "POST",
+      table: STUDIO_TABLES.orders,
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields[STUDIO_FIELDS.orders.orderId], "8899000011113");
+        assert.equal(fields[STUDIO_FIELDS.orders.orderStatus], "Ordered");
+        assert.equal(fields[STUDIO_FIELDS.orders.forResale], false);
+        assert.deepEqual(fields[STUDIO_FIELDS.orders.customer], [
+          "recSignedInComplianceCustomer1",
+        ]);
+      },
+      response: { records: [{ id: "recComplianceOrderSignedIn1", fields: {} }] },
+    },
+    {
+      method: "POST",
+      assert: (call) => {
+        assert.equal(call.url.host, "wnbrmm-sg.myshopify.com");
+        assert.equal(call.url.pathname, "/admin/api/2025-07/graphql.json");
+        const metafield = call.body?.variables?.metafields?.[0] || {};
+        assert.equal(metafield.ownerId, "gid://shopify/Order/8899000011113");
+        assert.equal(metafield.namespace, "ss");
+        assert.equal(metafield.key, "compliance");
+        assert.equal(metafield.type, "json");
+
+        const value = JSON.parse(metafield.value);
+        assert.equal(value.customer_airtable_id, "recSignedInComplianceCustomer1");
+        assert.equal(value.for_resale, false);
+      },
+      response: {
+        data: {
+          metafieldsSet: {
+            metafields: [{ id: "gid://shopify/Metafield/3", namespace: "ss", key: "compliance" }],
+            userErrors: [],
+          },
+        },
+      },
+    },
+    {
+      method: "PATCH",
+      table: "Webhook Events",
+      recordId: "recWebhookOrderComplianceSignedIn1",
+      assert: (call) => {
+        const fields = call.body?.records?.[0]?.fields || {};
+        assert.equal(fields.Status, "processed");
+      },
+      response: { records: [{ id: "recWebhookOrderComplianceSignedIn1", fields: {} }] },
+    },
+  ]);
+
+  try {
+    const req = createWebhookRequest({
+      topic: "orders/create",
+      webhookId: "wh_order_compliance_signed_in_1",
+      payload: {
+        id: 8899000011113,
+        name: "#1003",
+        email: "signedin@example.com",
+        customer: {
+          id: 9111,
+          email: "signedin@example.com",
+          first_name: "Signed",
+          last_name: "Buyer",
+        },
+        note_attributes: [
+          { name: "_ss_for_resale", value: "false" },
+          { name: "_ss_customer_airtable_id", value: "recStaleGuestCustomer" },
+          { name: "_ss_session_id", value: "session-signed-in-compliance-1" },
+        ],
+        line_items: [
+          {
+            id: 1,
+            title: "Trade Order",
+            product_id: 555,
+            variant_id: 777,
+            quantity: 30,
+            properties: [],
+          },
+        ],
+      },
+    });
+    const res = createWebhookResponse();
+
+    await shopifyWebhookOrdersCreate(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body?.ok, true);
+    assert.equal(res.body?.canonical_customer_record_id, "recSignedInComplianceCustomer1");
+    assert.deepEqual(res.body?.compliance_order_records, ["recComplianceOrderSignedIn1"]);
+    assert.equal(res.body?.shopify_order_compliance_metafield_sync?.ok, true);
+    fetchMock.assertDone();
+  } finally {
+    if (previousAdminToken == null) {
+      delete process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+    } else {
+      process.env.SHOPIFY_ADMIN_ACCESS_TOKEN = previousAdminToken;
+    }
+    fetchMock.restore();
+  }
+});
+
 test("guest order with _session_id only resolves saved configuration and links order", async () => {
   const fetchMock = installFetchSequence([
     {

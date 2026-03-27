@@ -29,6 +29,14 @@ export const STUDIO_FIELDS = {
   customers: {
     orders: "Orders & Fulfilment",
     addresses: "Addresses",
+    companyName: "Company Name",
+    tradingName: "Trading Name",
+    companyNumber: "Company Number",
+    vatNumber: "VAT Number",
+    premiseLicence: "Premise Licence",
+    alcoholLicence: "Alcohol Licence",
+    personalLicence: "Personal Licence",
+    tenLicence: "TEN Licence",
   },
   addresses: {
     fullAddress: "Full Address",
@@ -109,6 +117,7 @@ export const STUDIO_FIELDS = {
     customer: "Customer",
     savedConfiguration: "Saved Configuration",
     orderStatus: "Order Status",
+    forResale: "For Resale",
     addresses: "Addresses",
     configurationId: "Configuration ID",
     sessionId: "Session ID",
